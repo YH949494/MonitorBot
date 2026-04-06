@@ -1,0 +1,91 @@
+game_profile: generic_reel_game
+calibrated: false
+
+capture:
+  mode: region
+  window_title_contains: ""
+  region:
+    left: 100
+    top: 100
+    width: 1280
+    height: 720
+  fps: 8
+  coordinate_mode: relative_to_capture
+
+regions:
+  spin_button:
+    left: 1100
+    top: 620
+    width: 120
+    height: 60
+  reels:
+    left: 250
+    top: 180
+    width: 760
+    height: 260
+  popup_close:
+    left: 1180
+    top: 90
+    width: 50
+    height: 50
+  win_banner:
+    left: 420
+    top: 120
+    width: 420
+    height: 100
+  bonus_indicator:
+    left: 460
+    top: 80
+    width: 360
+    height: 120
+
+templates:
+  spin_button_ready:
+    path: assets/templates/spin_button_ready.png
+    threshold: 0.90
+  popup_close_x:
+    path: assets/templates/popup_close_x.png
+    threshold: 0.88
+  win_banner:
+    path: assets/templates/win_banner.png
+    threshold: 0.87
+  bonus_tease:
+    path: assets/templates/bonus_tease.png
+    threshold: 0.86
+  bonus_trigger:
+    path: assets/templates/bonus_trigger.png
+    threshold: 0.90
+  near_miss:
+    path: assets/templates/near_miss.png
+    threshold: 0.84
+  session_end:
+    path: assets/templates/session_end.png
+    threshold: 0.88
+
+detection:
+  spinning_motion_threshold: 12.0
+  stopped_consecutive_frames: 3
+  state_debounce_frames: 2
+  motion_history_frames: 3
+  near_miss_cooldown_sec: 2.0
+  bonus_tease_cooldown_sec: 2.0
+  popup_persist_frames: 45
+  min_confidence_for_transition: 0.35
+  use_ocr_balance: false
+  ocr_lang: eng
+
+automation:
+  enable_clicking: false
+  click_jitter_px: 6
+  min_delay_sec: 0.8
+  max_delay_sec: 1.8
+  max_clicks_per_minute: 40
+  panic_stop_file: logs/STOP.txt
+
+session:
+  max_spins: 300
+  max_duration_min: 45
+  max_consecutive_errors: 10
+
+output:
+  base_dir: "."

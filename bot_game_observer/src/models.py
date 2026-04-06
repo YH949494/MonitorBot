@@ -1,0 +1,217 @@
+"""Typed domain models for regions, events, detection, and session summaries."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Literal
+from uuid import uuid4
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class Region(BaseModel):
+    """Rectangle in pixels (left, top, width, height)."""
+
+    left: int = Field(ge=0)
+    top: int = Field(ge=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+
+    def clip_to(self, max_w: int, max_h: int) -> "Region":
+        """Clamp size so the region stays inside a box of max_w x max_h from origin."""
+        w = min(self.width, max(0, max_w - self.left))
+        h = min(self.height, max(0, max_h - self.top))
+        return Region(left=self.left, top=self.top, width=max(1, w), height=max(1, h))
+
+
+class CoordinateMode(str, Enum):
+    RELATIVE_TO_CAPTURE = "relative_to_capture"
+    ABSOLUTE_SCREEN = "absolute_screen"
+
+
+class CaptureMode(str, Enum):
+    REGION = "region"
+    WINDOW = "window"
+
+
+class CaptureConfig(BaseModel):
+    mode: CaptureMode = CaptureMode.REGION
+    window_title_contains: str = ""
+    region: Region
+    fps: float = Field(default=8.0, gt=0, le=60)
+    coordinate_mode: CoordinateMode = CoordinateMode.RELATIVE_TO_CAPTURE
+
+
+class TemplateSpec(BaseModel):
+    path: str
+    threshold: float = Field(default=0.85, ge=0.0, le=1.0)
+
+
+class DetectionConfig(BaseModel):
+    spinning_motion_threshold: float = Field(default=12.0, ge=0.0)
+    stopped_consecutive_frames: int = Field(default=3, ge=1)
+    state_debounce_frames: int = Field(default=2, ge=1)
+    motion_history_frames: int = Field(default=3, ge=1)
+    near_miss_cooldown_sec: float = Field(default=2.0, ge=0.0)
+    bonus_tease_cooldown_sec: float = Field(default=2.0, ge=0.0)
+    popup_persist_frames: int = Field(default=15, ge=1)
+    min_confidence_for_transition: float = Field(default=0.35, ge=0.0, le=1.0)
+    use_ocr_balance: bool = False
+    ocr_lang: str = "eng"
+
+
+class AutomationConfig(BaseModel):
+    enable_clicking: bool = False
+    click_jitter_px: int = Field(default=6, ge=0)
+    min_delay_sec: float = Field(default=0.8, ge=0.0)
+    max_delay_sec: float = Field(default=1.8, ge=0.0)
+    max_clicks_per_minute: int = Field(default=40, ge=1)
+    panic_stop_file: str = "logs/STOP.txt"
+
+
+class SessionLimitsConfig(BaseModel):
+    max_spins: int = Field(default=300, ge=1)
+    max_duration_min: float = Field(default=45.0, ge=0.1)
+    max_consecutive_errors: int = Field(default=10, ge=1)
+
+
+class OutputConfig(BaseModel):
+    """Legacy field; session logs/reports use fixed portable folders under app root."""
+
+    base_dir: str = "."
+
+
+class GameRegions(BaseModel):
+    """Named regions; coordinates per capture `coordinate_mode`."""
+
+    spin_button: Region
+    reels: Region
+    popup_close: Region | None = Field(default=None)
+    win_banner: Region | None = Field(default=None)
+    bonus_indicator: Region | None = Field(default=None)
+    balance_text: Region | None = Field(default=None)
+    session_end: Region | None = Field(default=None)
+
+
+class BotSettings(BaseModel):
+    """Full validated configuration for a game profile."""
+
+    game_profile: str = "generic_reel_game"
+    calibrated: bool = False
+    capture: CaptureConfig
+    regions: GameRegions
+    templates: dict[str, TemplateSpec] = Field(default_factory=dict)
+    detection: DetectionConfig = Field(default_factory=DetectionConfig)
+    automation: AutomationConfig = Field(default_factory=AutomationConfig)
+    session: SessionLimitsConfig = Field(default_factory=SessionLimitsConfig)
+    output: OutputConfig = Field(default_factory=OutputConfig)
+
+    @field_validator("templates", mode="before")
+    @classmethod
+    def empty_templates_ok(cls, v: Any) -> Any:
+        return v or {}
+
+
+class DetectorKind(str, Enum):
+    TEMPLATE = "template"
+    MOTION = "motion"
+    PIXEL_DIFF = "pixel_diff"
+    OCR = "ocr"
+    UNKNOWN = "unknown"
+
+
+class DetectorResult(BaseModel):
+    name: str
+    kind: DetectorKind = DetectorKind.UNKNOWN
+    active: bool = False
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class BotState(str, Enum):
+    IDLE = "IDLE"
+    READY_TO_SPIN = "READY_TO_SPIN"
+    SPINNING = "SPINNING"
+    RESULT_WIN = "RESULT_WIN"
+    RESULT_NO_WIN = "RESULT_NO_WIN"
+    BONUS_TEASE = "BONUS_TEASE"
+    BONUS_TRIGGERED = "BONUS_TRIGGERED"
+    POPUP_BLOCKING = "POPUP_BLOCKING"
+    SESSION_ENDED = "SESSION_ENDED"
+    ERROR = "ERROR"
+
+
+class SessionEventType(str, Enum):
+    SPIN_STARTED = "spin_started"
+    SPIN_STOPPED = "spin_stopped"
+    WIN_DETECTED = "win_detected"
+    NO_WIN_DETECTED = "no_win_detected"
+    NEAR_MISS_DETECTED = "near_miss_detected"
+    BONUS_TEASE_DETECTED = "bonus_tease_detected"
+    BONUS_TRIGGERED = "bonus_triggered"
+    POPUP_DETECTED = "popup_detected"
+    SESSION_STOPPED = "session_stopped"
+    STATE_TRANSITION = "state_transition"
+    CLICK_DRY_RUN = "click_dry_run"
+    CLICK_LIVE = "click_live"
+    ERROR = "error"
+    FRAME_TICK = "frame_tick"
+    CALIBRATION = "calibration"
+
+
+class SessionEvent(BaseModel):
+    session_id: str
+    ts: datetime = Field(default_factory=utcnow)
+    event_type: SessionEventType | str
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+    def model_dump_jsonl(self) -> dict[str, Any]:
+        d = self.model_dump(mode="json")
+        if isinstance(d.get("event_type"), str):
+            pass
+        return d
+
+
+class SessionSummary(BaseModel):
+    session_id: str
+    started_at: datetime
+    ended_at: datetime | None = None
+    duration_sec: float = 0.0
+    total_spins: int = 0
+    total_wins: int = 0
+    total_no_win: int = 0
+    first_win_spin_index: int | None = None
+    spins_before_first_win: int | None = None
+    gaps_between_wins: list[int] = Field(default_factory=list)
+    avg_spins_between_wins: float | None = None
+    max_spins_between_wins: int | None = None
+    near_miss_count: int = 0
+    near_miss_rate: float = 0.0
+    bonus_tease_count: int = 0
+    bonus_trigger_count: int = 0
+    end_reason: str = ""
+    consecutive_no_win_streak_max: int = 0
+    total_wins_currency: float | None = None
+    total_losses_currency: float | None = None
+    confidence_notes: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+def new_session_id() -> str:
+    return str(uuid4())
+
+
+class FramePacket(BaseModel):
+    """Single captured frame with optional precomputed grayscale."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    ts: datetime
+    frame_index: int
+    image_bgr: Any  # numpy array
+    gray: Any | None = None
