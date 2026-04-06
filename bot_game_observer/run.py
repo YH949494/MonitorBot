@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 
 from rich.console import Console
 
@@ -65,4 +66,16 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception:
+        # Last-resort crash logging
+        try:
+            setup_logging()
+            get_logger().exception("Fatal unhandled exception during launcher startup")
+        except Exception:
+            pass
+        traceback.print_exc()
+        raise SystemExit(1)
