@@ -2,8 +2,8 @@
 # Portable one-folder build. From project root:
 #   pyinstaller --clean build_portable.spec
 #
-# Output: dist/bot_game_observer/bot_game_observer.exe (+ _internal)
-# Copy the whole dist/bot_game_observer folder to USB; runtime data lives next to the exe.
+# Output: dist/MyAppPortable/MyApp.exe (+ _internal)
+# Copy the whole dist/MyAppPortable folder to USB; runtime data lives next to the exe.
 
 import os
 
@@ -42,7 +42,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="bot_game_observer",
+    name="MyApp",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -63,5 +63,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="bot_game_observer",
+    name="MyAppPortable",
 )

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import sys
 from pathlib import Path
 
 import yaml
@@ -117,6 +118,38 @@ def ensure_settings_json() -> None:
     log.info("Created portable config %s", SETTINGS_JSON)
 
 
+def migrate_legacy_config() -> None:
+    """
+    Safely migrate old config locations into ``config/settings.json`` when possible.
+    """
+    if SETTINGS_JSON.exists():
+        return
+
+    legacy_candidates = [
+        get_app_root() / "settings.json",
+        get_app_root() / "config.yaml",
+        get_app_root() / "config.yml",
+    ]
+    for legacy in legacy_candidates:
+        if not legacy.is_file():
+            continue
+        try:
+            if legacy.suffix.lower() == ".json":
+                settings = BotSettings.model_validate_json(legacy.read_text(encoding="utf-8"))
+            else:
+                with legacy.open("r", encoding="utf-8") as f:
+                    raw = yaml.safe_load(f) or {}
+                settings = BotSettings.model_validate(raw)
+        except Exception as e:
+            log.warning("Skipping legacy config migration from %s: %s", legacy, e)
+            continue
+
+        SETTINGS_JSON.parent.mkdir(parents=True, exist_ok=True)
+        SETTINGS_JSON.write_text(settings.model_dump_json(indent=2), encoding="utf-8")
+        log.info("Migrated legacy config: %s -> %s", legacy, SETTINGS_JSON)
+        return
+
+
 def init_portable_app(*, create_config: bool = True, migrate: bool = True) -> Path:
     """
     Full startup sequence. Returns :func:`get_app_root`.
@@ -125,6 +158,7 @@ def init_portable_app(*, create_config: bool = True, migrate: bool = True) -> Pa
     ensure_portable_directories()
     if migrate:
         migrate_legacy_layout()
+        migrate_legacy_config()
     if create_config:
         ensure_settings_json()
     _test_write(config_path())
@@ -135,6 +169,8 @@ def log_startup_paths(logger: logging.Logger | None = None) -> None:
     """Log resolved paths once (call after logging is configured)."""
     lg = logger or log
     root = get_app_root()
+    mode = "frozen" if getattr(sys, "frozen", False) else "dev"
+    lg.info("Startup mode: %s", mode)
     lg.info("Portable app root: %s", root)
     lg.info("Config: %s", SETTINGS_JSON)
     lg.info("Data dir: %s", root / "data")

@@ -23,6 +23,11 @@ def get_app_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def app_path(*parts: str | Path) -> Path:
+    """Path under the portable app root."""
+    return get_app_root().joinpath(*map(Path, parts))
+
+
 def resource_path(relative: str | Path) -> Path:
     """
     Read-only bundled file (e.g. default config) shipped inside the build.
@@ -42,32 +47,32 @@ def resource_path(relative: str | Path) -> Path:
 
 def data_path(*parts: str | Path) -> Path:
     """``<app_root>/data/`` + optional sub-path."""
-    return get_app_root().joinpath("data", *map(Path, parts))
+    return app_path("data", *parts)
 
 
 def logs_path(*parts: str | Path) -> Path:
     """``<app_root>/logs/`` + optional sub-path."""
-    return get_app_root().joinpath("logs", *map(Path, parts))
+    return app_path("logs", *parts)
 
 
 def screenshots_path(*parts: str | Path) -> Path:
     """``<app_root>/screenshots/`` + optional sub-path."""
-    return get_app_root().joinpath("screenshots", *map(Path, parts))
+    return app_path("screenshots", *parts)
 
 
 def config_path(*parts: str | Path) -> Path:
     """``<app_root>/config/`` + optional sub-path."""
-    return get_app_root().joinpath("config", *map(Path, parts))
+    return app_path("config", *parts)
 
 
 def exports_path(*parts: str | Path) -> Path:
     """``<app_root>/exports/`` + optional sub-path."""
-    return get_app_root().joinpath("exports", *map(Path, parts))
+    return app_path("exports", *parts)
 
 
 def assets_path(*parts: str | Path) -> Path:
     """``<app_root>/assets/`` (user templates and bundled defaults)."""
-    return get_app_root().joinpath("assets", *map(Path, parts))
+    return app_path("assets", *parts)
 
 
 # --- Well-known files --------------------------------------------------------
