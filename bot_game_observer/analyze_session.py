@@ -10,6 +10,7 @@ from pathlib import Path
 
 from rich.console import Console
 
+from src.app_paths import resolve_path_relative_to_app
 from src.bootstrap import init_portable_app
 from src.metrics import build_summary
 from src.reporting import ensure_output_dirs, write_csv_summary, write_markdown_report
@@ -45,7 +46,7 @@ def main() -> int:
 
     init_portable_app(create_config=False)
 
-    p = Path(args.jsonl)
+    p = resolve_path_relative_to_app(args.jsonl)
     if not p.is_file():
         console.print(f"[red]File not found: {p}[/red]")
         return 2
@@ -56,7 +57,7 @@ def main() -> int:
     summary = build_summary(session_id, events)
 
     if args.out_dir:
-        base = Path(args.out_dir)
+        base = resolve_path_relative_to_app(args.out_dir)
         reports = base / "reports"
         reports.mkdir(parents=True, exist_ok=True)
         csv_path = reports / f"session_{session_id}.csv"
