@@ -24,6 +24,8 @@ a = Analysis(
         "src.main",
         "src.app_paths",
         "src.session_runner",
+        "analyze_session",
+        "calibrate",
         "keyboard",
     ],
     hookspath=[],
