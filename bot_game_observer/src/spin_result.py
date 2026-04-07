@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 DetectorStatus = Literal["confirmed", "partial", "fallback", "timeout", "ambiguous"]
-ResultClass = Literal["real_win", "break_even", "net_loss_with_payout", "no_payout", "result_unknown"]
+ResultClass = Literal["confirmed_no_win", "confirmed_win", "probable_win", "unreadable_result"]
 PostResultVisualClassification = Literal["none", "normal_result", "long_animation", "bonus_like"]
 
 
@@ -57,8 +57,13 @@ class SpinResult(BaseModel):
     net_loss_with_payout: bool | None = None
     # no_payout: payout == 0
     no_payout: bool | None = None
-    # result_unknown: unable to reliably determine payout/result from available signals
-    result_class: ResultClass = "result_unknown"
+    # unreadable_result: unable to reliably determine payout/result from available signals
+    result_class: ResultClass = "unreadable_result"
+    classification_version: str = "v2"
+    result_evidence: list[str] = Field(default_factory=list)
+    payout_sampling_diagnostics: list[dict[str, object]] = Field(default_factory=list)
+    balance_sampling_diagnostics: list[dict[str, object]] = Field(default_factory=list)
+    bet_sampling_diagnostics: list[dict[str, object]] = Field(default_factory=list)
 
     detector_status: DetectorStatus = "partial"
     reason: str = "result_unknown_fallback"
@@ -80,41 +85,63 @@ def classify_spin_result(
     visual_win: bool | None,
     detector_status: DetectorStatus,
     reason: str,
+    result_kind: Literal["win", "no_win", "win_unreadable"] | None = None,
+    ready_recovered: bool = False,
+    win_signal_detected: bool = False,
+    payout_source: Literal["ocr", "balance_delta", "template", "unknown"] = "unknown",
+    balance_delta: float | None = None,
 ) -> dict[str, object]:
-    """Classify result without inferring no_payout from missing/failed detectors."""
+    """Classify result with explicit final categories required for production summaries."""
     any_payout: bool | None = None
     real_win: bool | None = None
     break_even: bool | None = None
     net_loss_with_payout: bool | None = None
     no_payout: bool | None = None
-    result_class: ResultClass = "result_unknown"
+    result_class: ResultClass = "unreadable_result"
+    result_evidence: list[str] = []
 
     if payout is None:
-        result_class = "result_unknown"
+        if detector_status == "timeout":
+            result_class = "unreadable_result"
+            result_evidence.append("timeout_without_payout")
+        elif visual_win is True or win_signal_detected or result_kind == "win_unreadable":
+            result_class = "probable_win"
+            result_evidence.append("visual_win_without_numeric_payout")
+        elif ready_recovered and result_kind == "no_win" and visual_win is not True:
+            result_class = "confirmed_no_win"
+            result_evidence.append("ready_recovered_no_win_no_positive_signal")
+        else:
+            result_class = "unreadable_result"
+            result_evidence.append("insufficient_numeric_and_visual_evidence")
     elif payout == 0:
         any_payout = False
         no_payout = True
-        result_class = "no_payout"
+        result_class = "confirmed_no_win"
+        result_evidence.append("payout_zero")
     else:
         any_payout = True
         no_payout = False
-        if bet is None:
-            result_class = "result_unknown"
-        elif payout > bet:
-            real_win = True
-            break_even = False
-            net_loss_with_payout = False
-            result_class = "real_win"
-        elif payout == bet:
-            real_win = False
-            break_even = True
-            net_loss_with_payout = False
-            result_class = "break_even"
-        else:
-            real_win = False
-            break_even = False
-            net_loss_with_payout = True
-            result_class = "net_loss_with_payout"
+        result_class = "confirmed_win"
+        result_evidence.append("payout_positive")
+        if bet is not None:
+            if payout > bet:
+                real_win = True
+                break_even = False
+                net_loss_with_payout = False
+            elif payout == bet:
+                real_win = False
+                break_even = True
+                net_loss_with_payout = False
+            else:
+                real_win = False
+                break_even = False
+                net_loss_with_payout = True
+
+    if payout_source == "balance_delta" and payout is not None and payout > 0:
+        result_evidence.append("balance_delta_positive")
+    if balance_delta is not None and balance_delta < 0 and payout is not None and payout > 0:
+        result_class = "unreadable_result"
+        result_evidence.append("contradictory_balance_delta")
 
     return {
         "visual_win": visual_win,
@@ -124,6 +151,8 @@ def classify_spin_result(
         "net_loss_with_payout": net_loss_with_payout,
         "no_payout": no_payout,
         "result_class": result_class,
+        "classification_version": "v2",
+        "result_evidence": result_evidence,
         "detector_status": detector_status,
         "reason": reason,
     }

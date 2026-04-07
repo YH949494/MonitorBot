@@ -5,7 +5,7 @@ from __future__ import annotations
 from src.spin_result import SpinResult, classify_spin_result
 
 
-def test_real_win_classification() -> None:
+def test_confirmed_win_classification() -> None:
     got = classify_spin_result(
         bet=2.0,
         payout=20.0,
@@ -15,10 +15,10 @@ def test_real_win_classification() -> None:
     )
     assert got["any_payout"] is True
     assert got["real_win"] is True
-    assert got["result_class"] == "real_win"
+    assert got["result_class"] == "confirmed_win"
 
 
-def test_break_even_classification() -> None:
+def test_break_even_is_confirmed_win_classification() -> None:
     got = classify_spin_result(
         bet=2.0,
         payout=2.0,
@@ -27,10 +27,10 @@ def test_break_even_classification() -> None:
         reason="payout_read_success",
     )
     assert got["break_even"] is True
-    assert got["result_class"] == "break_even"
+    assert got["result_class"] == "confirmed_win"
 
 
-def test_net_loss_with_payout_classification() -> None:
+def test_net_loss_with_payout_is_confirmed_win_classification() -> None:
     got = classify_spin_result(
         bet=2.0,
         payout=1.0,
@@ -41,7 +41,7 @@ def test_net_loss_with_payout_classification() -> None:
     assert got["any_payout"] is True
     assert got["real_win"] is False
     assert got["net_loss_with_payout"] is True
-    assert got["result_class"] == "net_loss_with_payout"
+    assert got["result_class"] == "confirmed_win"
 
 
 def test_no_payout_classification() -> None:
@@ -53,10 +53,10 @@ def test_no_payout_classification() -> None:
         reason="payout_read_success",
     )
     assert got["no_payout"] is True
-    assert got["result_class"] == "no_payout"
+    assert got["result_class"] == "confirmed_no_win"
 
 
-def test_visual_win_unknown_payout_is_unknown() -> None:
+def test_visual_win_unknown_payout_is_probable_win() -> None:
     got = classify_spin_result(
         bet=2.0,
         payout=None,
@@ -65,19 +65,21 @@ def test_visual_win_unknown_payout_is_unknown() -> None:
         reason="payout_not_readable",
     )
     assert got["visual_win"] is True
-    assert got["result_class"] == "result_unknown"
+    assert got["result_class"] == "probable_win"
 
 
-def test_no_visual_unknown_payout_is_unknown() -> None:
+def test_no_visual_unknown_payout_and_recovery_is_confirmed_no_win() -> None:
     got = classify_spin_result(
         bet=2.0,
         payout=None,
         visual_win=False,
-        detector_status="partial",
+        detector_status="confirmed",
         reason="payout_not_readable",
+        result_kind="no_win",
+        ready_recovered=True,
     )
     assert got["visual_win"] is False
-    assert got["result_class"] == "result_unknown"
+    assert got["result_class"] == "confirmed_no_win"
 
 
 def test_visible_win_balance_delta_success_real_win() -> None:
@@ -88,7 +90,7 @@ def test_visible_win_balance_delta_success_real_win() -> None:
         detector_status="partial",
         reason="balance_delta_estimate",
     )
-    assert got["result_class"] == "real_win"
+    assert got["result_class"] == "confirmed_win"
 
 
 def test_result_phase_timeout_flag_supported() -> None:
@@ -102,4 +104,4 @@ def test_result_phase_timeout_flag_supported() -> None:
         detector_status="timeout",
         reason="ready_not_recovered",
     )
-    assert got["result_class"] == "result_unknown"
+    assert got["result_class"] == "unreadable_result"

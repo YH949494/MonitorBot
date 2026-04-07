@@ -115,6 +115,7 @@ class SessionRunner:
         self._post_result_animation_since: float | None = None
         self._post_result_animation_reason: str | None = None
         self._result_detected_mono: float | None = None
+        self._spin_start_evidence_seen = False
         self._error_count = 0
         self._armed_for_click = True
 
@@ -151,6 +152,7 @@ class SessionRunner:
         self._post_result_animation_since = None
         self._post_result_animation_reason = None
         self._result_detected_mono = None
+        self._spin_start_evidence_seen = False
 
     def _save_evidence_crop(self, frame: FramePacket, region: Region | None, tag: str) -> None:
         if not self.settings.detection.payout_evidence_mode or self._active_spin is None or region is None:
@@ -182,6 +184,17 @@ class SessionRunner:
             visual_win=visual_win if visual_win is not None else self._active_spin.visual_win,
             detector_status=detector_status,
             reason=reason,
+            result_kind=self._active_spin.result_kind,
+            ready_recovered=(
+                self._active_spin.ts_ready_detected is not None and not self._active_spin.timeouts.result_to_ready
+            ),
+            win_signal_detected=self._active_spin.win_signal_detected,
+            payout_source=self._active_spin.payout_source,
+            balance_delta=(
+                None
+                if self._active_spin.balance_before is None or self._active_spin.balance_after is None
+                else round(self._active_spin.balance_after - self._active_spin.balance_before, 2)
+            ),
         )
         for k, v in payload.items():
             setattr(self._active_spin, k, v)
@@ -208,6 +221,7 @@ class SessionRunner:
         self._post_result_animation_since = None
         self._post_result_animation_reason = None
         self._result_detected_mono = None
+        self._spin_start_evidence_seen = False
 
     def _normalize_spin_result_timestamps(self, spin: SpinResult) -> None:
         if spin.post_result_animation_duration_sec is not None:
@@ -257,7 +271,7 @@ class SessionRunner:
         return float(v1), float((c1 + c2) / 2.0)
 
     def _update_payout_resolution(self, frame: FramePacket, sig: FrameSignals) -> None:
-        if self._active_spin is None or self._awaiting_ready_since is None:
+        if self._active_spin is None:
             return
 
         regs = self.settings.regions
@@ -265,30 +279,41 @@ class SessionRunner:
         now_mono = time.monotonic()
         if self._result_detected_mono is None:
             self._result_detected_mono = now_mono
+        if self._awaiting_ready_since is None and not (
+            self._finalize_on_ready and self.sm.state == BotState.READY_TO_SPIN
+        ):
+            self._append_sampling_diag(
+                "payout",
+                {"code": "sampling_skipped_state", "ts_mono": now_mono},
+                dedupe=True,
+            )
+            return
         if (now_mono - self._result_detected_mono) < self.settings.detection.payout_read_delay_sec:
             return
         if (now_mono - self._result_detected_mono) >= self.settings.detection.payout_read_retry_window_sec:
+            self._append_sampling_diag(
+                "payout",
+                {"code": "sampling_window_expired", "ts_mono": now_mono},
+                dedupe=True,
+            )
             return
         if self._active_spin.payout_read_attempts >= self.settings.detection.payout_read_max_attempts:
+            self._append_sampling_diag(
+                "payout",
+                {"code": "sampling_window_expired", "ts_mono": now_mono},
+                dedupe=True,
+            )
             return
         self._active_spin.payout_resolution_attempts += 1
         if self._active_spin.bet is None:
-            self._save_evidence_crop(frame, regs.bet_text, "sample_bet")
-            bet_text = vision.ocr_region_text(frame.image_bgr, regs.bet_text, lang=self.settings.detection.ocr_lang) if regs.bet_text else ""
-            if bet_text:
-                self._active_spin.raw_bet_ocr_samples.append(bet_text)
-            bet, bconf = vision.parse_numeric_amount(bet_text)
+            bet, bconf = self._attempt_sample_amount(frame, regs.bet_text, "bet")
             if bet is not None:
                 self._active_spin.bet = bet
                 self._active_spin.confidence_payout = bconf
                 self._active_spin.chosen_bet_source = "ocr"
 
-        self._save_evidence_crop(frame, regs.payout_text, "sample_payout")
         self._active_spin.payout_read_attempts += 1
-        payout_text = vision.ocr_region_text(frame.image_bgr, regs.payout_text, lang=self.settings.detection.ocr_lang) if regs.payout_text else ""
-        if payout_text:
-            self._active_spin.raw_payout_ocr_samples.append(payout_text)
-        payout, pconf = vision.parse_numeric_amount(payout_text)
+        payout, pconf = self._attempt_sample_amount(frame, regs.payout_text, "payout")
         if payout is not None:
             self._payout_samples.append((payout, pconf))
             stable_payout, stable_conf = self._stable_amount(self._payout_samples)
@@ -303,11 +328,7 @@ class SessionRunner:
                 self._active_spin.payout_read_success = True
 
         if self.settings.detection.use_ocr_balance:
-            self._save_evidence_crop(frame, regs.balance_text, "sample_balance")
-            bal_text = vision.ocr_region_text(frame.image_bgr, regs.balance_text, lang=self.settings.detection.ocr_lang) if regs.balance_text else ""
-            if bal_text:
-                self._active_spin.raw_balance_samples.append(bal_text)
-            bal, bconf = vision.parse_numeric_amount(bal_text)
+            bal, bconf = self._attempt_sample_amount(frame, regs.balance_text, "balance")
             if bal is not None:
                 self._balance_samples.append((bal, bconf))
                 stable_bal, stable_bal_conf = self._stable_amount(self._balance_samples)
@@ -330,6 +351,54 @@ class SessionRunner:
         if self._active_spin.payout is None and sig.win is False and self._active_spin.payout_source == "unknown":
             self._active_spin.payout_resolution_status = "unresolved"
 
+    def _append_sampling_diag(self, sample_kind: str, payload: dict[str, Any], *, dedupe: bool = False) -> None:
+        if self._active_spin is None:
+            return
+        target: list[dict[str, Any]]
+        if sample_kind == "payout":
+            target = self._active_spin.payout_sampling_diagnostics
+        elif sample_kind == "balance":
+            target = self._active_spin.balance_sampling_diagnostics
+        else:
+            target = self._active_spin.bet_sampling_diagnostics
+        if dedupe and target and target[-1].get("code") == payload.get("code"):
+            return
+        target.append(payload)
+
+    def _attempt_sample_amount(self, frame: FramePacket, region: Region | None, sample_kind: str) -> tuple[float | None, float]:
+        now_mono = time.monotonic()
+        if region is None:
+            self._append_sampling_diag(sample_kind, {"code": "roi_missing", "ts_mono": now_mono})
+            return None, 0.0
+        if frame.image_bgr is None:
+            self._append_sampling_diag(sample_kind, {"code": "frame_none", "ts_mono": now_mono})
+            return None, 0.0
+        self._save_evidence_crop(frame, region, f"sample_{sample_kind}")
+        crop = vision.crop_region(frame.image_bgr, region)
+        if crop.size == 0:
+            self._append_sampling_diag(sample_kind, {"code": "roi_empty", "ts_mono": now_mono})
+            return None, 0.0
+        try:
+            text = vision.ocr_region_text(frame.image_bgr, region, lang=self.settings.detection.ocr_lang)
+        except Exception:
+            self._append_sampling_diag(sample_kind, {"code": "ocr_exception", "ts_mono": now_mono})
+            return None, 0.0
+        if sample_kind == "payout":
+            self._active_spin.raw_payout_ocr_samples.append(text)
+        elif sample_kind == "balance":
+            self._active_spin.raw_balance_samples.append(text)
+        else:
+            self._active_spin.raw_bet_ocr_samples.append(text)
+        if not text.strip():
+            self._append_sampling_diag(sample_kind, {"code": "ocr_blank", "ts_mono": now_mono})
+            return None, 0.0
+        amount, conf = vision.parse_numeric_amount(text)
+        if amount is None:
+            self._append_sampling_diag(sample_kind, {"code": "parse_failed", "ts_mono": now_mono, "raw_text": text})
+            return None, 0.0
+        self._append_sampling_diag(sample_kind, {"code": "sample_accepted", "ts_mono": now_mono, "confidence": conf})
+        return amount, conf
+
     def _check_spin_timeouts(self, sig: FrameSignals, frame: FramePacket) -> None:
         det = self.settings.detection
         now = time.monotonic()
@@ -337,6 +406,20 @@ class SessionRunner:
             return
 
         if self._awaiting_spinning_since is not None:
+            has_spin_start_evidence = sig.reels_spinning or (
+                sig.motion_score >= self.settings.detection.spinning_motion_threshold
+            )
+            if has_spin_start_evidence:
+                self._spin_start_evidence_seen = True
+            if self._spin_start_evidence_seen:
+                self._awaiting_spinning_since = None
+                if self._spinning_since is None:
+                    self._spinning_since = now
+                if self._active_spin.ts_spinning_detected is None:
+                    self._active_spin.ts_spinning_detected = frame.ts
+                    self._active_spin.detector_status = "partial"
+                    self._active_spin.reason = "spinning_evidence_detected"
+                return
             if (now - self._awaiting_spinning_since) >= det.click_to_spinning_timeout_sec:
                 self._active_spin.timeouts.click_to_spinning = True
                 self._emit(
