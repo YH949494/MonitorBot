@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 
 from rich.console import Console
 
@@ -13,7 +14,8 @@ from .session_runner import run_session
 console = Console()
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    print("[DEBUG] ENTER MAIN")
     parser = argparse.ArgumentParser(description="Game window observer / QA bot (demo mode only).")
     parser.add_argument(
         "--config",
@@ -31,7 +33,7 @@ def main() -> int:
         action="store_true",
         help="Disable dry-run logging for clicks (use with --live-click).",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     try:
         settings = load_settings_auto(args.config)
@@ -53,5 +55,10 @@ def main() -> int:
             "automation.enable_clicking: true, and supervision.[/yellow]"
         )
 
+    print("[DEBUG] STARTING SESSION")
     run_session(settings, live_click=args.live_click, dry_run=dry_run)
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
