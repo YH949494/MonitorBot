@@ -136,7 +136,7 @@ class SessionRunner:
         ev = SessionEvent(session_id=self.session_id, ts=_utcnow(), event_type=event_type, payload=payload)
         rec = ev.model_dump(mode="json")
         self._logs.append(rec)
-        _, logs_dir = ensure_output_dirs()
+        logs_dir, _ = ensure_output_dirs()
         append_jsonl(logs_dir / f"session_{self.session_id}.jsonl", rec)
         log.debug("event %s %s", event_type, payload)
 
