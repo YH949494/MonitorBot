@@ -27,6 +27,7 @@ from .models import (
 )
 from .reporting import append_jsonl, ensure_output_dirs, write_csv_summary, write_markdown_report
 from .state_machine import FrameSignals, GameStateMachine, TransitionRecord
+from .spin_result import DetectorStatus, SpinResult, classify_spin_result
 from .templates import load_template_grayscale
 from . import vision
 from .metrics import build_summary
@@ -97,6 +98,14 @@ class SessionRunner:
         self._stopped_count = 0
         self._spinning_count = 0
         self._spin_counter = 0
+        self._active_spin: SpinResult | None = None
+        self._awaiting_spinning_since: float | None = None
+        self._spinning_since: float | None = None
+        self._awaiting_ready_since: float | None = None
+        self._payout_samples: deque[tuple[float, float]] = deque(maxlen=3)
+        self._balance_samples: deque[tuple[float, float]] = deque(maxlen=3)
+        self._result_evidence_saved = False
+        self._finalize_on_ready = False
         self._last_near_miss = 0.0
         self._last_tease = 0.0
         self._popup_frames = 0
@@ -105,6 +114,215 @@ class SessionRunner:
 
         self._logs: list[dict[str, Any]] = []
         self._panic_path = self._resolve_panic_path(settings.automation.panic_stop_file)
+        self._payout_evidence_dir = resolve_path_relative_to_app(settings.detection.payout_evidence_dir)
+
+    def _start_spin_attempt(self, click_ts: datetime | None) -> None:
+        self._spin_counter += 1
+        self._active_spin = SpinResult(
+            spin_index=self._spin_counter,
+            ts_start=_utcnow(),
+            ts_click=click_ts,
+            detector_status="partial",
+            reason="awaiting_spinning_after_click",
+        )
+        self._awaiting_spinning_since = time.monotonic()
+        self._spinning_since = None
+        self._awaiting_ready_since = None
+        self._payout_samples.clear()
+        self._balance_samples.clear()
+        self._result_evidence_saved = False
+        self._finalize_on_ready = False
+
+    def _save_evidence_crop(self, frame: FramePacket, region: Region | None, tag: str) -> None:
+        if not self.settings.detection.payout_evidence_mode or self._active_spin is None or region is None:
+            return
+        crop = vision.crop_region(frame.image_bgr, region)
+        if crop.size == 0:
+            return
+        self._payout_evidence_dir.mkdir(parents=True, exist_ok=True)
+        out = self._payout_evidence_dir / f"spin_{self._active_spin.spin_index}_{tag}_f{frame.frame_index}.png"
+        cv2.imwrite(str(out), crop)
+
+    def _finalize_spin_result(
+        self,
+        *,
+        detector_status: DetectorStatus,
+        reason: str,
+        payout: float | None = None,
+        visual_win: bool | None = None,
+        fallback_used: bool = False,
+    ) -> None:
+        if self._active_spin is None:
+            return
+        payload = classify_spin_result(
+            bet=self._active_spin.bet,
+            payout=payout,
+            visual_win=visual_win if visual_win is not None else self._active_spin.visual_win,
+            detector_status=detector_status,
+            reason=reason,
+        )
+        for k, v in payload.items():
+            setattr(self._active_spin, k, v)
+        self._active_spin.chosen_payout_source = self._active_spin.payout_source
+        self._active_spin.payout = payout
+        self._active_spin.fallback_used = fallback_used
+        self._active_spin.ts_result_detected = _utcnow()
+        ev_payload = self._active_spin.model_dump(mode="json")
+        ev_payload["type"] = SessionEventType.SPIN_RESULT_SUMMARY.value
+        self._emit(SessionEventType.SPIN_RESULT_SUMMARY, ev_payload)
+        self._active_spin = None
+        self._awaiting_spinning_since = None
+        self._spinning_since = None
+        self._awaiting_ready_since = None
+        self._payout_samples.clear()
+        self._balance_samples.clear()
+        self._result_evidence_saved = False
+        self._finalize_on_ready = False
+
+    def _read_amount(self, frame: FramePacket, region: Region | None) -> tuple[float | None, float]:
+        if region is None:
+            return None, 0.0
+        text = vision.ocr_region_text(frame.image_bgr, region, lang=self.settings.detection.ocr_lang)
+        return vision.parse_numeric_amount(text)
+
+    def _stable_amount(self, samples: deque[tuple[float, float]]) -> tuple[float | None, float]:
+        if len(samples) < 2:
+            return None, 0.0
+        v1, c1 = samples[-1]
+        v2, c2 = samples[-2]
+        if abs(v1 - v2) > 0.009:
+            return None, 0.0
+        return float(v1), float((c1 + c2) / 2.0)
+
+    def _update_payout_resolution(self, frame: FramePacket, sig: FrameSignals) -> None:
+        if self._active_spin is None or self._awaiting_ready_since is None:
+            return
+
+        regs = self.settings.regions
+        self._active_spin.payout_resolution_attempts += 1
+        if self._active_spin.bet is None:
+            self._save_evidence_crop(frame, regs.bet_text, "sample_bet")
+            bet_text = vision.ocr_region_text(frame.image_bgr, regs.bet_text, lang=self.settings.detection.ocr_lang) if regs.bet_text else ""
+            if bet_text:
+                self._active_spin.raw_bet_ocr_samples.append(bet_text)
+            bet, bconf = vision.parse_numeric_amount(bet_text)
+            if bet is not None:
+                self._active_spin.bet = bet
+                self._active_spin.confidence_payout = bconf
+                self._active_spin.chosen_bet_source = "ocr"
+
+        self._save_evidence_crop(frame, regs.payout_text, "sample_payout")
+        payout_text = vision.ocr_region_text(frame.image_bgr, regs.payout_text, lang=self.settings.detection.ocr_lang) if regs.payout_text else ""
+        if payout_text:
+            self._active_spin.raw_payout_ocr_samples.append(payout_text)
+        payout, pconf = vision.parse_numeric_amount(payout_text)
+        if payout is not None:
+            self._payout_samples.append((payout, pconf))
+            stable_payout, stable_conf = self._stable_amount(self._payout_samples)
+            if stable_payout is not None:
+                self._active_spin.payout = stable_payout
+                self._active_spin.payout_source = "ocr"
+                self._active_spin.chosen_payout_source = "ocr"
+                self._active_spin.payout_resolution_status = "confirmed"
+                self._active_spin.confidence_payout = stable_conf
+                self._active_spin.detector_status = "confirmed"
+                self._active_spin.reason = "payout_read_success"
+
+        if self.settings.detection.use_ocr_balance:
+            self._save_evidence_crop(frame, regs.balance_text, "sample_balance")
+            bal_text = vision.ocr_region_text(frame.image_bgr, regs.balance_text, lang=self.settings.detection.ocr_lang) if regs.balance_text else ""
+            if bal_text:
+                self._active_spin.raw_balance_samples.append(bal_text)
+            bal, bconf = vision.parse_numeric_amount(bal_text)
+            if bal is not None:
+                self._balance_samples.append((bal, bconf))
+                stable_bal, stable_bal_conf = self._stable_amount(self._balance_samples)
+                if stable_bal is not None:
+                    if self._active_spin.balance_before is None:
+                        self._active_spin.balance_before = stable_bal
+                    else:
+                        self._active_spin.balance_after = stable_bal
+                        if self._active_spin.payout is None:
+                            delta = self._active_spin.balance_after - self._active_spin.balance_before
+                            if delta >= 0:
+                                self._active_spin.payout = round(delta, 2)
+                                self._active_spin.payout_source = "balance_delta"
+                                self._active_spin.chosen_payout_source = "balance_delta"
+                                self._active_spin.payout_resolution_status = "estimated"
+                                self._active_spin.confidence_payout = stable_bal_conf
+                                self._active_spin.detector_status = "partial"
+                                self._active_spin.reason = "balance_delta_estimate"
+
+        if self._active_spin.payout is None and sig.win is False and self._active_spin.payout_source == "unknown":
+            self._active_spin.payout_resolution_status = "unresolved"
+
+    def _check_spin_timeouts(self, sig: FrameSignals) -> None:
+        det = self.settings.detection
+        now = time.monotonic()
+        if self._active_spin is None:
+            return
+
+        if self._awaiting_spinning_since is not None:
+            if (now - self._awaiting_spinning_since) >= det.click_to_spinning_timeout_sec:
+                self._active_spin.timeouts.click_to_spinning = True
+                self._emit(
+                    SessionEventType.ERROR,
+                    {
+                        "type": "spin_timeout",
+                        "spin_index": self._active_spin.spin_index,
+                        "reason": "click_to_spinning_timeout",
+                    },
+                )
+                self._finalize_spin_result(
+                    detector_status="timeout",
+                    reason="click_to_spinning_timeout",
+                    payout=None,
+                    visual_win=sig.win,
+                    fallback_used=True,
+                )
+                self._armed_for_click = True
+                return
+
+        if self._spinning_since is not None:
+            if (now - self._spinning_since) >= det.spinning_to_result_timeout_sec:
+                self._active_spin.timeouts.spinning_to_result = True
+                self._emit(
+                    SessionEventType.ERROR,
+                    {
+                        "type": "spin_timeout",
+                        "spin_index": self._active_spin.spin_index,
+                        "reason": "spinning_to_result_timeout",
+                    },
+                )
+                self._finalize_spin_result(
+                    detector_status="timeout",
+                    reason="spinning_to_result_timeout",
+                    payout=None,
+                    visual_win=sig.win,
+                    fallback_used=True,
+                )
+                self._armed_for_click = True
+                return
+
+        if self._awaiting_ready_since is not None:
+            if (now - self._awaiting_ready_since) >= det.result_to_ready_timeout_sec:
+                self._active_spin.timeouts.result_to_ready = True
+                self._emit(
+                    SessionEventType.ERROR,
+                    {
+                        "type": "spin_timeout",
+                        "spin_index": self._active_spin.spin_index,
+                        "reason": "ready_not_recovered",
+                    },
+                )
+                self._finalize_spin_result(
+                    detector_status="timeout",
+                    reason="ready_not_recovered",
+                    payout=self._active_spin.payout,
+                    visual_win=sig.win,
+                    fallback_used=True,
+                )
+                self._armed_for_click = True
 
     def _resolve_panic_path(self, p: str) -> Path:
         return resolve_path_relative_to_app(p)
@@ -280,7 +498,15 @@ class SessionRunner:
                 BotState.READY_TO_SPIN,
                 BotState.IDLE,
             ):
-                self._spin_counter += 1
+                if self._active_spin is None:
+                    self._start_spin_attempt(click_ts=None)
+                if self._active_spin is not None:
+                    self._active_spin.ts_spinning_detected = r.ts
+                    self._active_spin.confidence_motion = r.confidence
+                    self._active_spin.detector_status = "partial"
+                    self._active_spin.reason = "spinning_detected"
+                self._awaiting_spinning_since = None
+                self._spinning_since = time.monotonic()
                 self._emit(
                     SessionEventType.SPIN_STARTED,
                     {"spin_index": self._spin_counter, "confidence": r.confidence},
@@ -290,21 +516,35 @@ class SessionRunner:
                 BotState.RESULT_NO_WIN,
             ):
                 self._emit(SessionEventType.SPIN_STOPPED, {"spin_index": self._spin_counter})
+                self._spinning_since = None
+                self._awaiting_ready_since = time.monotonic()
             if r.to_state == BotState.RESULT_WIN:
                 self._emit(
                     SessionEventType.WIN_DETECTED,
                     {"spin_index": self._spin_counter, "confidence": r.confidence},
                 )
+                if self._active_spin is not None:
+                    self._active_spin.visual_win = True
+                    self._active_spin.confidence_visual = r.confidence
+                    self._active_spin.detector_status = "partial"
+                    self._active_spin.reason = "awaiting_payout_resolution"
             if r.to_state == BotState.RESULT_NO_WIN:
-                self._emit(
-                    SessionEventType.NO_WIN_DETECTED,
-                    {"spin_index": self._spin_counter, "confidence": r.confidence},
-                )
                 if r.reason == "near_miss_template":
                     self._emit(
                         SessionEventType.NEAR_MISS_DETECTED,
                         {"spin_index": self._spin_counter, "confidence": r.confidence},
                     )
+                    if self._active_spin is not None:
+                        self._active_spin.visual_win = False
+                        self._active_spin.confidence_visual = r.confidence
+                        self._active_spin.detector_status = "ambiguous"
+                        self._active_spin.reason = "ambiguous_visual_signal"
+                else:
+                    if self._active_spin is not None:
+                        self._active_spin.visual_win = False
+                        self._active_spin.confidence_visual = r.confidence
+                        self._active_spin.detector_status = "fallback"
+                        self._active_spin.reason = "awaiting_payout_resolution"
             if r.to_state == BotState.BONUS_TEASE:
                 self._emit(SessionEventType.BONUS_TEASE_DETECTED, {"confidence": r.confidence})
             if r.to_state == BotState.BONUS_TRIGGERED:
@@ -313,6 +553,10 @@ class SessionRunner:
                 self._emit(SessionEventType.POPUP_DETECTED, {"confidence": r.confidence})
             if r.to_state == BotState.READY_TO_SPIN:
                 self._armed_for_click = True
+                if self._active_spin is not None:
+                    self._active_spin.ts_ready_detected = r.ts
+                    self._active_spin.confidence_ready = r.confidence
+                    self._finalize_on_ready = True
             if r.to_state == BotState.SESSION_ENDED:
                 pass
 
@@ -367,6 +611,24 @@ class SessionRunner:
 
                 recs = self.sm.update(sig)
                 self._handle_transitions(recs)
+                if self._active_spin is not None and self._awaiting_ready_since is not None and not self._result_evidence_saved:
+                    self._save_evidence_crop(frame, self.settings.regions.bet_text, "first_result_bet")
+                    self._save_evidence_crop(frame, self.settings.regions.payout_text, "first_result_payout")
+                    self._save_evidence_crop(frame, self.settings.regions.balance_text, "first_result_balance")
+                    self._result_evidence_saved = True
+                self._update_payout_resolution(frame, sig)
+                if self._finalize_on_ready and self._active_spin is not None and self.sm.state == BotState.READY_TO_SPIN:
+                    self._save_evidence_crop(frame, self.settings.regions.bet_text, "ready_bet")
+                    self._save_evidence_crop(frame, self.settings.regions.payout_text, "ready_payout")
+                    self._save_evidence_crop(frame, self.settings.regions.balance_text, "ready_balance")
+                    self._finalize_spin_result(
+                        detector_status=self._active_spin.detector_status,
+                        reason=self._active_spin.reason if self._active_spin.payout is not None else "payout_not_readable",
+                        payout=self._active_spin.payout,
+                        visual_win=self._active_spin.visual_win,
+                        fallback_used=self._active_spin.payout is None,
+                    )
+                self._check_spin_timeouts(sig)
 
                 if self.sm.state == BotState.SESSION_ENDED:
                     self._emit(SessionEventType.SESSION_STOPPED, {"reason": "session_end_detected"})
@@ -388,9 +650,19 @@ class SessionRunner:
                             spin_region,
                             self.settings.automation.click_jitter_px,
                         )
+                        click_ts = _utcnow()
+                        self._start_spin_attempt(click_ts=click_ts)
+                        self._save_evidence_crop(frame, self.settings.regions.bet_text, "before_click_bet")
+                        self._save_evidence_crop(frame, self.settings.regions.payout_text, "before_click_payout")
+                        self._save_evidence_crop(frame, self.settings.regions.balance_text, "before_click_balance")
+                        if self.settings.detection.use_ocr_balance and self._active_spin is not None:
+                            bal, bconf = self._read_amount(frame, self.settings.regions.balance_text)
+                            if bal is not None:
+                                self._active_spin.balance_before = bal
+                                self._active_spin.confidence_payout = bconf
                         self._emit(
                             SessionEventType.CLICK_DRY_RUN,
-                            {"x": x, "y": y},
+                            {"x": x, "y": y, "spin_index": self._spin_counter},
                         )
                         self._armed_for_click = False
                     else:
@@ -400,9 +672,19 @@ class SessionRunner:
                         )
                         pt = self.clicker.click_spin()
                         if pt is not None:
+                            click_ts = _utcnow()
+                            self._start_spin_attempt(click_ts=click_ts)
+                            self._save_evidence_crop(frame, self.settings.regions.bet_text, "before_click_bet")
+                            self._save_evidence_crop(frame, self.settings.regions.payout_text, "before_click_payout")
+                            self._save_evidence_crop(frame, self.settings.regions.balance_text, "before_click_balance")
+                            if self.settings.detection.use_ocr_balance and self._active_spin is not None:
+                                bal, bconf = self._read_amount(frame, self.settings.regions.balance_text)
+                                if bal is not None:
+                                    self._active_spin.balance_before = bal
+                                    self._active_spin.confidence_payout = bconf
                             self._emit(
                                 SessionEventType.CLICK_LIVE,
-                                {"x": pt[0], "y": pt[1]},
+                                {"x": pt[0], "y": pt[1], "spin_index": self._spin_counter},
                             )
                             self._armed_for_click = False
 
@@ -413,6 +695,14 @@ class SessionRunner:
             self._emit(SessionEventType.SESSION_STOPPED, {"reason": "keyboard_interrupt"})
         finally:
             ended = _utcnow()
+            if self._active_spin is not None:
+                self._finalize_spin_result(
+                    detector_status="fallback",
+                    reason="result_unknown_fallback",
+                    payout=None,
+                    visual_win=self._active_spin.visual_win,
+                    fallback_used=True,
+                )
             if not self._session_stop_emitted:
                 self._emit(
                     SessionEventType.SESSION_STOPPED,
