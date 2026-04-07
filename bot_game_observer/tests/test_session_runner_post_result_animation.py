@@ -44,7 +44,13 @@ def _make_sig(*, motion: float, spin_button_ready: bool, bonus_trigger: bool = F
 def _make_runner() -> tuple[SessionRunner, list[tuple[SessionEventType, dict]]]:
     runner = SessionRunner.__new__(SessionRunner)
     runner.settings = SimpleNamespace(
-        detection=SimpleNamespace(result_to_ready_timeout_sec=4.0, result_animation_timeout_sec=12.0),
+        detection=SimpleNamespace(
+            result_to_ready_timeout_sec=4.0,
+            result_animation_timeout_sec=12.0,
+            post_result_normal_threshold_sec=1.0,
+            post_result_long_animation_threshold_sec=3.0,
+            post_result_bonus_like_threshold_sec=6.0,
+        ),
         regions=SimpleNamespace(spin_button=None),
     )
     runner.sm = SimpleNamespace(state=BotState.POST_RESULT_ANIMATION)
@@ -101,3 +107,101 @@ def test_bonus_trigger_sets_post_result_animation_reason() -> None:
     assert runner._active_spin is not None
     assert runner._active_spin.reason == "bonus_feature_animation"
     assert any(payload.get("type") == "post_result_animation_bonus_feature" for _et, payload in events)
+
+
+def test_post_result_visual_short_win_is_normal_result(monkeypatch) -> None:
+    runner, _events = _make_runner()
+    rec = [
+        SimpleNamespace(
+            from_state=BotState.POST_RESULT_ANIMATION,
+            to_state=BotState.READY_TO_SPIN,
+            reason="spin_button_ready",
+            confidence=0.95,
+            frame_index=4,
+            ts=datetime.now(timezone.utc),
+            detail={},
+        )
+    ]
+    monkeypatch.setattr("src.session_runner.time.monotonic", lambda: 101.2)
+    runner._handle_transitions(rec)
+    assert runner._active_spin is not None
+    assert runner._active_spin.post_result_animation_duration_sec == 1.2
+    assert runner._active_spin.post_result_visual_classification == "normal_result"
+
+
+def test_post_result_visual_long_win_animation(monkeypatch) -> None:
+    runner, _events = _make_runner()
+    rec = [
+        SimpleNamespace(
+            from_state=BotState.POST_RESULT_ANIMATION,
+            to_state=BotState.READY_TO_SPIN,
+            reason="spin_button_ready",
+            confidence=0.95,
+            frame_index=4,
+            ts=datetime.now(timezone.utc),
+            detail={},
+        )
+    ]
+    monkeypatch.setattr("src.session_runner.time.monotonic", lambda: 104.2)
+    runner._handle_transitions(rec)
+    assert runner._active_spin is not None
+    assert runner._active_spin.post_result_visual_classification == "long_animation"
+
+
+def test_post_result_visual_extra_long_or_bonus_like(monkeypatch) -> None:
+    runner, _events = _make_runner()
+    runner._post_result_animation_reason = "bonus_feature_animation"
+    rec = [
+        SimpleNamespace(
+            from_state=BotState.POST_RESULT_ANIMATION,
+            to_state=BotState.READY_TO_SPIN,
+            reason="spin_button_ready",
+            confidence=0.95,
+            frame_index=4,
+            ts=datetime.now(timezone.utc),
+            detail={},
+        )
+    ]
+    monkeypatch.setattr("src.session_runner.time.monotonic", lambda: 106.5)
+    runner._handle_transitions(rec)
+    assert runner._active_spin is not None
+    assert runner._active_spin.post_result_visual_classification == "bonus_like"
+
+
+def test_post_result_visual_no_win_quick_recovery_is_none(monkeypatch) -> None:
+    runner, _events = _make_runner()
+    runner._active_spin = SpinResult(spin_index=2, visual_win=False, result_kind="no_win")
+    runner._awaiting_ready_since = 100.0
+    rec = [
+        SimpleNamespace(
+            from_state=BotState.RESULT_NO_WIN,
+            to_state=BotState.READY_TO_SPIN,
+            reason="spin_button_ready",
+            confidence=0.95,
+            frame_index=4,
+            ts=datetime.now(timezone.utc),
+            detail={},
+        )
+    ]
+    monkeypatch.setattr("src.session_runner.time.monotonic", lambda: 100.4)
+    runner._handle_transitions(rec)
+    assert runner._active_spin is not None
+    assert runner._active_spin.post_result_visual_classification == "none"
+
+
+def test_post_result_animation_does_not_rearm_click_until_ready() -> None:
+    runner, _events = _make_runner()
+    rec = [
+        SimpleNamespace(
+            from_state=BotState.RESULT_WIN,
+            to_state=BotState.POST_RESULT_ANIMATION,
+            reason="post_result_animation_motion",
+            confidence=0.9,
+            frame_index=3,
+            ts=datetime.now(timezone.utc),
+            detail={"motion": 19.0},
+        )
+    ]
+    runner._armed_for_click = False
+    runner._handle_transitions(rec)
+    assert runner._armed_for_click is False
