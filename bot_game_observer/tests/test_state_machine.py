@@ -58,3 +58,43 @@ def test_popup_priority() -> None:
     sm.state = BotState.SPINNING
     rec = sm.update(_sig(popup=True, reels_spinning=True, confidences={"popup": 0.9}))
     assert rec[0].to_state == BotState.POPUP_BLOCKING
+
+
+def test_post_result_fallback_recovers_ready_without_template_match() -> None:
+    sm = GameStateMachine(debounce_frames=1, min_confidence=0.1)
+    sm.state = BotState.READY_TO_SPIN
+    rec = sm.update(
+        _sig(
+            reels_spinning=True,
+            reels_stopped=False,
+            motion_score=20.0,
+            spin_button_ready=False,
+            confidences={"motion": 0.9},
+        )
+    )
+    assert rec and rec[0].to_state == BotState.SPINNING
+
+    rec = sm.update(
+        _sig(
+            reels_spinning=False,
+            reels_stopped=True,
+            spin_button_ready=False,
+            win=False,
+            near_miss=False,
+            confidences={"no_win": 0.8},
+        )
+    )
+    assert rec and rec[0].to_state == BotState.RESULT_NO_WIN
+
+    rec = sm.update(
+        _sig(
+            reels_spinning=False,
+            reels_stopped=True,
+            popup=False,
+            spin_button_ready=False,
+            post_result_ready_fallback=True,
+            confidences={"post_result_recovery": 0.45},
+        )
+    )
+    assert rec and rec[0].to_state == BotState.READY_TO_SPIN
+    assert rec[0].reason == "post_result_recovery_fallback"
