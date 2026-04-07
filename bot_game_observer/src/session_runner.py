@@ -109,6 +109,9 @@ class SessionRunner:
         self._last_near_miss = 0.0
         self._last_tease = 0.0
         self._popup_frames = 0
+        self._result_recovery_stable_frames = 0
+        self._result_ready_debug_frames: deque[dict[str, Any]] = deque(maxlen=10)
+        self._result_spin_button_ready_evidence_saved = False
         self._error_count = 0
         self._armed_for_click = True
 
@@ -256,7 +259,7 @@ class SessionRunner:
         if self._active_spin.payout is None and sig.win is False and self._active_spin.payout_source == "unknown":
             self._active_spin.payout_resolution_status = "unresolved"
 
-    def _check_spin_timeouts(self, sig: FrameSignals) -> None:
+    def _check_spin_timeouts(self, sig: FrameSignals, frame: FramePacket) -> None:
         det = self.settings.detection
         now = time.monotonic()
         if self._active_spin is None:
@@ -306,6 +309,15 @@ class SessionRunner:
 
         if self._awaiting_ready_since is not None:
             if (now - self._awaiting_ready_since) >= det.result_to_ready_timeout_sec:
+                self._save_evidence_crop(frame, self.settings.regions.spin_button, "ready_timeout_last_spin_button")
+                debug_frames = list(self._result_ready_debug_frames)
+                if debug_frames:
+                    log.warning(
+                        "result_to_ready timeout debug spin=%s state=%s frames=%s",
+                        self._active_spin.spin_index,
+                        self.sm.state.value,
+                        debug_frames,
+                    )
                 self._active_spin.timeouts.result_to_ready = True
                 self._emit(
                     SessionEventType.ERROR,
@@ -313,6 +325,7 @@ class SessionRunner:
                         "type": "spin_timeout",
                         "spin_index": self._active_spin.spin_index,
                         "reason": "ready_not_recovered",
+                        "debug_last_frames": debug_frames,
                     },
                 )
                 self._finalize_spin_result(
@@ -453,6 +466,17 @@ class SessionRunner:
         else:
             self._popup_frames = 0
 
+        post_result_recovery = False
+        if self._awaiting_ready_since is not None:
+            if reels_stopped and not popup:
+                self._result_recovery_stable_frames += 1
+            else:
+                self._result_recovery_stable_frames = 0
+            if self._result_recovery_stable_frames >= max(2, det.stopped_consecutive_frames):
+                post_result_recovery = True
+        else:
+            self._result_recovery_stable_frames = 0
+
         confidences = {
             "motion": min(1.0, motion_val / max(1.0, det.spinning_motion_threshold * 2)),
             "popup": pconf,
@@ -462,6 +486,7 @@ class SessionRunner:
             "bonus_trigger": btrconf,
             "spin_ready": srconf,
             "session_end": 0.8 if s_end else 0.0,
+            "post_result_recovery": 0.45 if post_result_recovery else 0.0,
         }
 
         return FrameSignals(
@@ -478,6 +503,7 @@ class SessionRunner:
             near_miss=near_m and reels_stopped,
             session_end=s_end,
             spin_button_ready=s_ready,
+            post_result_ready_fallback=post_result_recovery,
             confidences=confidences,
         )
 
@@ -518,6 +544,9 @@ class SessionRunner:
                 self._emit(SessionEventType.SPIN_STOPPED, {"spin_index": self._spin_counter})
                 self._spinning_since = None
                 self._awaiting_ready_since = time.monotonic()
+                self._result_recovery_stable_frames = 0
+                self._result_ready_debug_frames.clear()
+                self._result_spin_button_ready_evidence_saved = False
             if r.to_state == BotState.RESULT_WIN:
                 self._emit(
                     SessionEventType.WIN_DETECTED,
@@ -611,6 +640,27 @@ class SessionRunner:
 
                 recs = self.sm.update(sig)
                 self._handle_transitions(recs)
+                if self._active_spin is not None and self._awaiting_ready_since is not None:
+                    self._result_ready_debug_frames.append(
+                        {
+                            "frame_index": frame.frame_index,
+                            "state": self.sm.state.value,
+                            "spin_button_ready": sig.spin_button_ready,
+                            "popup": sig.popup,
+                            "win": sig.win,
+                            "near_miss": sig.near_miss,
+                            "motion_score": round(sig.motion_score, 4),
+                            "confidences": dict(sig.confidences),
+                        }
+                    )
+                    if any(
+                        r.from_state == BotState.SPINNING and r.to_state in (BotState.RESULT_WIN, BotState.RESULT_NO_WIN)
+                        for r in recs
+                    ):
+                        self._save_evidence_crop(frame, self.settings.regions.spin_button, "first_result_spin_button")
+                    if sig.spin_button_ready and not self._result_spin_button_ready_evidence_saved:
+                        self._save_evidence_crop(frame, self.settings.regions.spin_button, "ready_signal_spin_button")
+                        self._result_spin_button_ready_evidence_saved = True
                 if self._active_spin is not None and self._awaiting_ready_since is not None and not self._result_evidence_saved:
                     self._save_evidence_crop(frame, self.settings.regions.bet_text, "first_result_bet")
                     self._save_evidence_crop(frame, self.settings.regions.payout_text, "first_result_payout")
@@ -628,7 +678,7 @@ class SessionRunner:
                         visual_win=self._active_spin.visual_win,
                         fallback_used=self._active_spin.payout is None,
                     )
-                self._check_spin_timeouts(sig)
+                self._check_spin_timeouts(sig, frame)
 
                 if self.sm.state == BotState.SESSION_ENDED:
                     self._emit(SessionEventType.SESSION_STOPPED, {"reason": "session_end_detected"})

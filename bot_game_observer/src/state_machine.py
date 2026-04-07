@@ -26,6 +26,7 @@ class FrameSignals:
     near_miss: bool
     session_end: bool
     spin_button_ready: bool
+    post_result_ready_fallback: bool = False
     confidences: dict[str, float] = field(default_factory=dict)
 
 
@@ -113,6 +114,8 @@ class GameStateMachine:
         if self.state in (BotState.RESULT_WIN, BotState.RESULT_NO_WIN):
             if sig.spin_button_ready:
                 return BotState.READY_TO_SPIN, conf("spin_ready", 0.6), "post_result_ready"
+            if sig.post_result_ready_fallback:
+                return BotState.READY_TO_SPIN, conf("post_result_recovery", 0.45), "post_result_recovery_fallback"
 
         if self.state == BotState.IDLE:
             return BotState.READY_TO_SPIN, 0.5, "bootstrap_ready"
