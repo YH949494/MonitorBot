@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 DetectorStatus = Literal["confirmed", "partial", "fallback", "timeout", "ambiguous"]
 ResultClass = Literal["real_win", "break_even", "net_loss_with_payout", "no_payout", "result_unknown"]
+PostResultVisualClassification = Literal["none", "normal_result", "long_animation", "bonus_like"]
 
 
 class SpinTimeouts(BaseModel):
@@ -24,6 +25,10 @@ class SpinResult(BaseModel):
     ts_spinning_detected: datetime | None = None
     ts_result_detected: datetime | None = None
     ts_ready_detected: datetime | None = None
+    result_kind: Literal["win", "no_win"] | None = None
+    post_result_animation_started_at: datetime | None = None
+    post_result_animation_duration_sec: float | None = None
+    post_result_visual_classification: PostResultVisualClassification = "none"
 
     bet: float | None = None
     payout: float | None = None

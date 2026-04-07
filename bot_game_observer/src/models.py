@@ -66,6 +66,9 @@ class DetectionConfig(BaseModel):
     spinning_to_result_timeout_sec: float = Field(default=6.0, ge=0.1)
     result_to_ready_timeout_sec: float = Field(default=4.0, ge=0.1)
     result_animation_timeout_sec: float = Field(default=12.0, ge=0.1)
+    post_result_normal_threshold_sec: float = Field(default=1.0, ge=0.0)
+    post_result_long_animation_threshold_sec: float = Field(default=3.0, ge=0.1)
+    post_result_bonus_like_threshold_sec: float = Field(default=6.0, ge=0.1)
     payout_evidence_mode: bool = False
     payout_evidence_dir: str = "logs/payout_evidence"
     use_ocr_balance: bool = False

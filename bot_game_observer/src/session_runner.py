@@ -121,6 +121,16 @@ class SessionRunner:
         self._panic_path = self._resolve_panic_path(settings.automation.panic_stop_file)
         self._payout_evidence_dir = resolve_path_relative_to_app(settings.detection.payout_evidence_dir)
 
+    def _classify_post_result_visual(self, duration_sec: float, bonus_like_signal: bool) -> str:
+        det = self.settings.detection
+        if bonus_like_signal or duration_sec >= det.post_result_bonus_like_threshold_sec:
+            return "bonus_like"
+        if duration_sec >= det.post_result_long_animation_threshold_sec:
+            return "long_animation"
+        if duration_sec >= det.post_result_normal_threshold_sec:
+            return "normal_result"
+        return "none"
+
     def _start_spin_attempt(self, click_ts: datetime | None) -> None:
         self._spin_counter += 1
         self._active_spin = SpinResult(
@@ -565,6 +575,9 @@ class SessionRunner:
                 self._result_spin_button_ready_evidence_saved = False
                 self._post_result_animation_since = None
                 self._post_result_animation_reason = None
+                if self._active_spin is not None:
+                    self._active_spin.result_kind = "win" if r.to_state == BotState.RESULT_WIN else "no_win"
+                    self._active_spin.post_result_animation_started_at = r.ts
             if r.to_state == BotState.POST_RESULT_ANIMATION:
                 now_mono = time.monotonic()
                 if self._post_result_animation_since is None:
@@ -640,7 +653,18 @@ class SessionRunner:
                 if self._active_spin is not None:
                     self._active_spin.ts_ready_detected = r.ts
                     self._active_spin.confidence_ready = r.confidence
-                    self._finalize_on_ready = True
+                    if self._awaiting_ready_since is not None:
+                        duration_sec = max(0.0, time.monotonic() - self._awaiting_ready_since)
+                        bonus_like_signal = (
+                            self._post_result_animation_reason == "bonus_feature_animation"
+                            or self.sm.state == BotState.BONUS_TRIGGERED
+                        )
+                        self._active_spin.post_result_animation_duration_sec = round(duration_sec, 3)
+                        self._active_spin.post_result_visual_classification = self._classify_post_result_visual(
+                            duration_sec,
+                            bonus_like_signal=bonus_like_signal,
+                        )
+                self._finalize_on_ready = True
             if r.to_state == BotState.SESSION_ENDED:
                 pass
 
