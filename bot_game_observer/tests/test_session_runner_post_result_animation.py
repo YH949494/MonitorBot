@@ -45,6 +45,7 @@ def _make_runner() -> tuple[SessionRunner, list[tuple[SessionEventType, dict]]]:
     runner = SessionRunner.__new__(SessionRunner)
     runner.settings = SimpleNamespace(
         detection=SimpleNamespace(
+            spinning_motion_threshold=12.0,
             result_to_ready_timeout_sec=4.0,
             result_animation_timeout_sec=12.0,
             post_result_normal_threshold_sec=1.0,
@@ -248,11 +249,18 @@ def test_repeated_payout_sampling_succeeds_within_window(monkeypatch) -> None:
     runner, _events = _make_runner()
     runner._active_spin = SpinResult(spin_index=5, visual_win=True, result_kind="win", bet=1.0)
     runner._awaiting_ready_since = 100.0
+    runner.settings.regions = SimpleNamespace(
+        spin_button=None,
+        bet_text=None,
+        payout_text=SimpleNamespace(left=0, top=0, width=1, height=1),
+        balance_text=None,
+    )
     frame = FramePacket(ts=datetime.now(timezone.utc), frame_index=2, image_bgr=np.zeros((4, 4, 3), dtype=np.uint8))
     sig = _make_sig(motion=0.0, spin_button_ready=True)
     sig.win = True
     seq = iter([(None, 0.0), (None, 0.0), (2.5, 0.9), (2.5, 0.9)])
-    monkeypatch.setattr("src.session_runner.vision.ocr_region_text", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr("src.session_runner.vision.ocr_region_text", lambda *_args, **_kwargs: "2.5")
+    monkeypatch.setattr("src.session_runner.vision.crop_region", lambda *_args, **_kwargs: np.ones((1, 1, 3), dtype=np.uint8))
     monkeypatch.setattr("src.session_runner.vision.parse_numeric_amount", lambda *_args, **_kwargs: next(seq))
     monkeypatch.setattr("src.session_runner.time.monotonic", lambda: 100.5)
     runner._update_payout_resolution(frame, sig)
@@ -268,6 +276,7 @@ def test_repeated_payout_sampling_succeeds_within_window(monkeypatch) -> None:
 def test_no_win_stability_does_not_become_win_unreadable() -> None:
     runner, _events = _make_runner()
     runner._active_spin = SpinResult(spin_index=6, visual_win=False, result_kind="no_win")
+    runner._active_spin.ts_ready_detected = datetime.now(timezone.utc)
     runner._finalize_spin_result(
         detector_status="fallback",
         reason="payout_not_readable",
@@ -278,6 +287,119 @@ def test_no_win_stability_does_not_become_win_unreadable() -> None:
     )
     _et, payload = _events[-1]
     assert payload["result_kind"] != "win_unreadable"
+    assert payload["result_class"] == "confirmed_no_win"
+
+
+def test_sampling_attempt_diagnostics_present_on_blank_and_parse_fail(monkeypatch) -> None:
+    runner, _events = _make_runner()
+    runner._active_spin = SpinResult(spin_index=7, visual_win=False, result_kind="no_win")
+    runner._awaiting_ready_since = 100.0
+    runner._result_detected_mono = 100.0
+    frame = FramePacket(ts=datetime.now(timezone.utc), frame_index=2, image_bgr=np.zeros((4, 4, 3), dtype=np.uint8))
+    sig = _make_sig(motion=0.0, spin_button_ready=False)
+    runner.settings.regions = SimpleNamespace(
+        spin_button=None,
+        bet_text=SimpleNamespace(left=0, top=0, width=1, height=1),
+        payout_text=SimpleNamespace(left=0, top=0, width=1, height=1),
+        balance_text=None,
+    )
+    monkeypatch.setattr("src.session_runner.time.monotonic", lambda: 100.5)
+    monkeypatch.setattr("src.session_runner.vision.crop_region", lambda *_args, **_kwargs: np.ones((1, 1, 3), dtype=np.uint8))
+    monkeypatch.setattr("src.session_runner.vision.ocr_region_text", lambda *_args, **_kwargs: "abc")
+    monkeypatch.setattr("src.session_runner.vision.parse_numeric_amount", lambda *_args, **_kwargs: (None, 0.0))
+    runner._update_payout_resolution(frame, sig)
+    assert runner._active_spin is not None
+    assert runner._active_spin.raw_payout_ocr_samples
+    assert any(d.get("code") == "parse_failed" for d in runner._active_spin.payout_sampling_diagnostics)
+
+
+def test_click_to_spinning_timeout_guard_on_motion_signal(monkeypatch) -> None:
+    runner, events = _make_runner()
+    runner._active_spin = SpinResult(spin_index=8)
+    runner._awaiting_spinning_since = 100.0
+    frame = FramePacket(ts=datetime.now(timezone.utc), frame_index=2, image_bgr=np.zeros((4, 4, 3), dtype=np.uint8))
+    sig = _make_sig(motion=20.0, spin_button_ready=False)
+    monkeypatch.setattr("src.session_runner.time.monotonic", lambda: 110.0)
+    runner._check_spin_timeouts(sig, frame)
+    assert not any(payload.get("reason") == "click_to_spinning_timeout" for _et, payload in events if isinstance(payload, dict))
+
+
+def test_click_timeout_suppressed_by_motion_only_spin_start_evidence(monkeypatch) -> None:
+    runner, events = _make_runner()
+    runner._active_spin = SpinResult(spin_index=10)
+    runner._awaiting_spinning_since = 100.0
+    frame = FramePacket(ts=datetime.now(timezone.utc), frame_index=2, image_bgr=np.zeros((4, 4, 3), dtype=np.uint8))
+    sig = FrameSignals(
+        ts=datetime.now(timezone.utc),
+        frame_index=2,
+        motion_score=15.0,
+        reels_spinning=False,
+        reels_stopped=False,
+        popup=False,
+        win=False,
+        no_win_hint=False,
+        bonus_tease=False,
+        bonus_trigger=False,
+        near_miss=False,
+        session_end=False,
+        spin_button_ready=False,
+        confidences={"motion": 0.9},
+    )
+    monkeypatch.setattr("src.session_runner.time.monotonic", lambda: 110.0)
+    runner._check_spin_timeouts(sig, frame)
+    assert runner._awaiting_spinning_since is None
+    assert runner._spinning_since == 110.0
+    assert not any(payload.get("reason") == "click_to_spinning_timeout" for _et, payload in events if isinstance(payload, dict))
+
+
+def test_sampling_diag_dedupes_repeated_state_and_window_codes(monkeypatch) -> None:
+    runner, _events = _make_runner()
+    runner._active_spin = SpinResult(spin_index=11, visual_win=False, result_kind="no_win")
+    runner._result_detected_mono = 100.0
+    runner._awaiting_ready_since = None
+    frame = FramePacket(ts=datetime.now(timezone.utc), frame_index=2, image_bgr=np.zeros((4, 4, 3), dtype=np.uint8))
+    sig = _make_sig(motion=0.0, spin_button_ready=False)
+    monkeypatch.setattr("src.session_runner.time.monotonic", lambda: 100.5)
+    runner._update_payout_resolution(frame, sig)
+    runner._update_payout_resolution(frame, sig)
+    assert runner._active_spin is not None
+    skipped = [d for d in runner._active_spin.payout_sampling_diagnostics if d.get("code") == "sampling_skipped_state"]
+    assert len(skipped) == 1
+
+    runner._awaiting_ready_since = 100.0
+    monkeypatch.setattr("src.session_runner.time.monotonic", lambda: 101.5)
+    runner._update_payout_resolution(frame, sig)
+    runner._update_payout_resolution(frame, sig)
+    expired = [d for d in runner._active_spin.payout_sampling_diagnostics if d.get("code") == "sampling_window_expired"]
+    assert len(expired) == 1
+
+
+def test_balance_delta_fallback_uses_staged_before_after_samples(monkeypatch) -> None:
+    runner, _events = _make_runner()
+    runner.settings.detection.use_ocr_balance = True
+    runner.settings.regions = SimpleNamespace(
+        spin_button=None,
+        bet_text=None,
+        payout_text=SimpleNamespace(left=0, top=0, width=1, height=1),
+        balance_text=SimpleNamespace(left=0, top=0, width=1, height=1),
+    )
+    runner._active_spin = SpinResult(spin_index=12, visual_win=False, result_kind="no_win", balance_before=100.0)
+    runner._awaiting_ready_since = 100.0
+    runner._result_detected_mono = 100.0
+    frame = FramePacket(ts=datetime.now(timezone.utc), frame_index=2, image_bgr=np.zeros((4, 4, 3), dtype=np.uint8))
+    sig = _make_sig(motion=0.0, spin_button_ready=False)
+    seq = iter([(None, 0.0), (101.0, 0.9), (None, 0.0), (101.0, 0.9)])
+    monkeypatch.setattr("src.session_runner.time.monotonic", lambda: 100.5)
+    monkeypatch.setattr("src.session_runner.vision.crop_region", lambda *_args, **_kwargs: np.ones((1, 1, 3), dtype=np.uint8))
+    monkeypatch.setattr("src.session_runner.vision.ocr_region_text", lambda *_args, **_kwargs: "101.0")
+    monkeypatch.setattr("src.session_runner.vision.parse_numeric_amount", lambda *_args, **_kwargs: next(seq))
+    runner._update_payout_resolution(frame, sig)
+    runner._update_payout_resolution(frame, sig)
+    assert runner._active_spin is not None
+    assert runner._active_spin.balance_before == 100.0
+    assert runner._active_spin.balance_after == 101.0
+    assert runner._active_spin.payout_source == "balance_delta"
+    assert runner._active_spin.payout == 1.0
 
 
 def test_long_animation_without_win_cues_is_not_probable_win(monkeypatch) -> None:
@@ -296,6 +418,12 @@ def test_deferred_finalize_stays_armed_and_finalizes_after_late_payout(monkeypat
     runner._awaiting_ready_since = 100.0
     runner._result_detected_mono = 100.0
     runner._finalize_on_ready = True
+    runner.settings.regions = SimpleNamespace(
+        spin_button=None,
+        bet_text=None,
+        payout_text=SimpleNamespace(left=0, top=0, width=1, height=1),
+        balance_text=None,
+    )
     sig = _make_sig(motion=0.0, spin_button_ready=True)
     sig.win = True
 
@@ -305,8 +433,9 @@ def test_deferred_finalize_stays_armed_and_finalizes_after_late_payout(monkeypat
 
     frame = FramePacket(ts=datetime.now(timezone.utc), frame_index=3, image_bgr=np.zeros((4, 4, 3), dtype=np.uint8))
     seq = iter([(None, 0.0), (2.0, 0.9), (2.0, 0.9)])
-    monkeypatch.setattr("src.session_runner.vision.ocr_region_text", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr("src.session_runner.vision.ocr_region_text", lambda *_args, **_kwargs: "2.0")
     monkeypatch.setattr("src.session_runner.vision.parse_numeric_amount", lambda *_args, **_kwargs: next(seq))
+    monkeypatch.setattr("src.session_runner.vision.crop_region", lambda *_args, **_kwargs: np.ones((1, 1, 3), dtype=np.uint8))
     monkeypatch.setattr("src.session_runner.time.monotonic", lambda: 100.5)
     runner._update_payout_resolution(frame, sig)
     runner._update_payout_resolution(frame, sig)
