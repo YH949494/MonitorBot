@@ -21,12 +21,12 @@ def _exit_code_from_system_exit(exc: SystemExit) -> int:
 
 def _dispatch(argv: list[str]) -> int:
     command = argv[1] if len(argv) > 1 else "run"
+    rest = argv[2:] if len(argv) > 2 else []
 
     if command == "run":
         from src.main import main as app_main
 
-        sys.argv = [argv[0], *argv[2:]]
-        return app_main()
+        return app_main(rest)
 
     if command == "analyze":
         from analyze_session import main as analyze_main
