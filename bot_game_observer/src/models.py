@@ -65,6 +65,7 @@ class DetectionConfig(BaseModel):
     click_to_spinning_timeout_sec: float = Field(default=2.0, ge=0.1)
     spinning_to_result_timeout_sec: float = Field(default=6.0, ge=0.1)
     result_to_ready_timeout_sec: float = Field(default=4.0, ge=0.1)
+    result_animation_timeout_sec: float = Field(default=12.0, ge=0.1)
     payout_evidence_mode: bool = False
     payout_evidence_dir: str = "logs/payout_evidence"
     use_ocr_balance: bool = False
@@ -147,6 +148,7 @@ class BotState(str, Enum):
     SPINNING = "SPINNING"
     RESULT_WIN = "RESULT_WIN"
     RESULT_NO_WIN = "RESULT_NO_WIN"
+    POST_RESULT_ANIMATION = "POST_RESULT_ANIMATION"
     BONUS_TEASE = "BONUS_TEASE"
     BONUS_TRIGGERED = "BONUS_TRIGGERED"
     POPUP_BLOCKING = "POPUP_BLOCKING"

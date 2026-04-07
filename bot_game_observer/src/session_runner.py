@@ -112,6 +112,8 @@ class SessionRunner:
         self._result_recovery_stable_frames = 0
         self._result_ready_debug_frames: deque[dict[str, Any]] = deque(maxlen=10)
         self._result_spin_button_ready_evidence_saved = False
+        self._post_result_animation_since: float | None = None
+        self._post_result_animation_reason: str | None = None
         self._error_count = 0
         self._armed_for_click = True
 
@@ -135,6 +137,8 @@ class SessionRunner:
         self._balance_samples.clear()
         self._result_evidence_saved = False
         self._finalize_on_ready = False
+        self._post_result_animation_since = None
+        self._post_result_animation_reason = None
 
     def _save_evidence_crop(self, frame: FramePacket, region: Region | None, tag: str) -> None:
         if not self.settings.detection.payout_evidence_mode or self._active_spin is None or region is None:
@@ -181,6 +185,8 @@ class SessionRunner:
         self._balance_samples.clear()
         self._result_evidence_saved = False
         self._finalize_on_ready = False
+        self._post_result_animation_since = None
+        self._post_result_animation_reason = None
 
     def _read_amount(self, frame: FramePacket, region: Region | None) -> tuple[float | None, float]:
         if region is None:
@@ -308,14 +314,24 @@ class SessionRunner:
                 return
 
         if self._awaiting_ready_since is not None:
-            if (now - self._awaiting_ready_since) >= det.result_to_ready_timeout_sec:
+            if self.sm.state == BotState.POST_RESULT_ANIMATION:
+                animation_started = self._post_result_animation_since or self._awaiting_ready_since
+                if (now - animation_started) < det.result_animation_timeout_sec:
+                    return
+                timeout_reason = "post_result_animation_timeout"
+            else:
+                if (now - self._awaiting_ready_since) < det.result_to_ready_timeout_sec:
+                    return
+                timeout_reason = "ready_not_recovered"
+            if self._active_spin is not None:
                 self._save_evidence_crop(frame, self.settings.regions.spin_button, "ready_timeout_last_spin_button")
                 debug_frames = list(self._result_ready_debug_frames)
                 if debug_frames:
                     log.warning(
-                        "result_to_ready timeout debug spin=%s state=%s frames=%s",
+                        "result_to_ready timeout debug spin=%s state=%s reason=%s frames=%s",
                         self._active_spin.spin_index,
                         self.sm.state.value,
+                        timeout_reason,
                         debug_frames,
                     )
                 self._active_spin.timeouts.result_to_ready = True
@@ -324,13 +340,13 @@ class SessionRunner:
                     {
                         "type": "spin_timeout",
                         "spin_index": self._active_spin.spin_index,
-                        "reason": "ready_not_recovered",
+                        "reason": timeout_reason,
                         "debug_last_frames": debug_frames,
                     },
                 )
                 self._finalize_spin_result(
                     detector_status="timeout",
-                    reason="ready_not_recovered",
+                    reason=timeout_reason,
                     payout=self._active_spin.payout,
                     visual_win=sig.win,
                     fallback_used=True,
@@ -547,6 +563,30 @@ class SessionRunner:
                 self._result_recovery_stable_frames = 0
                 self._result_ready_debug_frames.clear()
                 self._result_spin_button_ready_evidence_saved = False
+                self._post_result_animation_since = None
+                self._post_result_animation_reason = None
+            if r.to_state == BotState.POST_RESULT_ANIMATION:
+                now_mono = time.monotonic()
+                if self._post_result_animation_since is None:
+                    self._post_result_animation_since = now_mono
+                if self._active_spin is not None:
+                    self._post_result_animation_reason = (
+                        "post_result_big_win_animation" if self._active_spin.visual_win else "post_result_animation"
+                    )
+                    self._active_spin.reason = self._post_result_animation_reason
+                window = list(self._result_ready_debug_frames)[-5:]
+                trend = [round(float(f.get("motion_score", 0.0)), 4) for f in window]
+                self._emit(
+                    SessionEventType.FRAME_TICK,
+                    {
+                        "type": "post_result_animation_entered",
+                        "spin_index": self._spin_counter,
+                        "duration_sec": round(now_mono - (self._awaiting_ready_since or now_mono), 3),
+                        "motion_trend": trend,
+                        "motion_score": r.detail.get("motion"),
+                        "reason": self._post_result_animation_reason or "post_result_animation",
+                    },
+                )
             if r.to_state == BotState.RESULT_WIN:
                 self._emit(
                     SessionEventType.WIN_DETECTED,
@@ -578,6 +618,21 @@ class SessionRunner:
                 self._emit(SessionEventType.BONUS_TEASE_DETECTED, {"confidence": r.confidence})
             if r.to_state == BotState.BONUS_TRIGGERED:
                 self._emit(SessionEventType.BONUS_TRIGGERED, {"confidence": r.confidence})
+                if self._active_spin is not None and self._awaiting_ready_since is not None:
+                    self._post_result_animation_reason = "bonus_feature_animation"
+                    self._active_spin.reason = "bonus_feature_animation"
+                    self._emit(
+                        SessionEventType.FRAME_TICK,
+                        {
+                            "type": "post_result_animation_bonus_feature",
+                            "spin_index": self._spin_counter,
+                            "duration_sec": round(
+                                time.monotonic() - (self._awaiting_ready_since or time.monotonic()),
+                                3,
+                            ),
+                            "reason": "bonus_feature_animation",
+                        },
+                    )
             if r.to_state == BotState.POPUP_BLOCKING:
                 self._emit(SessionEventType.POPUP_DETECTED, {"confidence": r.confidence})
             if r.to_state == BotState.READY_TO_SPIN:
@@ -671,9 +726,12 @@ class SessionRunner:
                     self._save_evidence_crop(frame, self.settings.regions.bet_text, "ready_bet")
                     self._save_evidence_crop(frame, self.settings.regions.payout_text, "ready_payout")
                     self._save_evidence_crop(frame, self.settings.regions.balance_text, "ready_balance")
+                    finalize_reason = self._active_spin.reason if self._active_spin.payout is not None else "payout_not_readable"
+                    if self._post_result_animation_reason:
+                        finalize_reason = self._post_result_animation_reason
                     self._finalize_spin_result(
                         detector_status=self._active_spin.detector_status,
-                        reason=self._active_spin.reason if self._active_spin.payout is not None else "payout_not_readable",
+                        reason=finalize_reason,
                         payout=self._active_spin.payout,
                         visual_win=self._active_spin.visual_win,
                         fallback_used=self._active_spin.payout is None,
