@@ -78,6 +78,9 @@ detection:
   post_result_normal_threshold_sec: 1.0
   post_result_long_animation_threshold_sec: 3.0
   post_result_bonus_like_threshold_sec: 6.0
+  payout_read_delay_sec: 0.25
+  payout_read_retry_window_sec: 1.0
+  payout_read_max_attempts: 5
   payout_evidence_mode: false
   payout_evidence_dir: logs/payout_evidence
   use_ocr_balance: false

@@ -69,6 +69,9 @@ class DetectionConfig(BaseModel):
     post_result_normal_threshold_sec: float = Field(default=1.0, ge=0.0)
     post_result_long_animation_threshold_sec: float = Field(default=3.0, ge=0.1)
     post_result_bonus_like_threshold_sec: float = Field(default=6.0, ge=0.1)
+    payout_read_delay_sec: float = Field(default=0.25, ge=0.0)
+    payout_read_retry_window_sec: float = Field(default=1.0, ge=0.0)
+    payout_read_max_attempts: int = Field(default=5, ge=1)
     payout_evidence_mode: bool = False
     payout_evidence_dir: str = "logs/payout_evidence"
     use_ocr_balance: bool = False

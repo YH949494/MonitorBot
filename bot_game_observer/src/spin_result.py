@@ -25,7 +25,7 @@ class SpinResult(BaseModel):
     ts_spinning_detected: datetime | None = None
     ts_result_detected: datetime | None = None
     ts_ready_detected: datetime | None = None
-    result_kind: Literal["win", "no_win"] | None = None
+    result_kind: Literal["win", "no_win", "win_unreadable"] | None = None
     post_result_animation_started_at: datetime | None = None
     post_result_animation_duration_sec: float | None = None
     post_result_visual_classification: PostResultVisualClassification = "none"
@@ -42,6 +42,9 @@ class SpinResult(BaseModel):
     chosen_payout_source: Literal["ocr", "balance_delta", "template", "unknown"] = "unknown"
     chosen_bet_source: Literal["ocr", "unknown"] = "unknown"
     payout_resolution_attempts: int = 0
+    payout_read_attempts: int = 0
+    payout_read_success: bool = False
+    win_signal_detected: bool = False
 
     # visual_win: observed visual signal that resembles a win presentation on screen
     visual_win: bool | None = None
