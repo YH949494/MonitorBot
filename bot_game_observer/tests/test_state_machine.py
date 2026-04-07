@@ -98,3 +98,34 @@ def test_post_result_fallback_recovers_ready_without_template_match() -> None:
     )
     assert rec and rec[0].to_state == BotState.READY_TO_SPIN
     assert rec[0].reason == "post_result_recovery_fallback"
+
+
+def test_result_enters_post_result_animation_when_motion_persists() -> None:
+    sm = GameStateMachine(debounce_frames=1, min_confidence=0.1)
+    sm.state = BotState.RESULT_WIN
+    rec = sm.update(
+        _sig(
+            reels_spinning=True,
+            reels_stopped=False,
+            motion_score=20.0,
+            popup=False,
+            spin_button_ready=False,
+            confidences={"motion": 0.9},
+        )
+    )
+    assert rec and rec[0].to_state == BotState.POST_RESULT_ANIMATION
+    assert rec[0].reason == "post_result_animation_motion"
+
+
+def test_post_result_animation_recovers_to_ready() -> None:
+    sm = GameStateMachine(debounce_frames=1, min_confidence=0.1)
+    sm.state = BotState.POST_RESULT_ANIMATION
+    rec = sm.update(
+        _sig(
+            reels_spinning=False,
+            reels_stopped=True,
+            spin_button_ready=True,
+            confidences={"spin_ready": 0.8},
+        )
+    )
+    assert rec and rec[0].to_state == BotState.READY_TO_SPIN

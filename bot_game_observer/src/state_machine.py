@@ -90,6 +90,7 @@ class GameStateMachine:
         if sig.reels_spinning and self.state not in (
             BotState.RESULT_WIN,
             BotState.RESULT_NO_WIN,
+            BotState.POST_RESULT_ANIMATION,
         ):
             return BotState.SPINNING, max(conf("motion", 0.7), 0.6), "reel_motion"
 
@@ -106,16 +107,31 @@ class GameStateMachine:
             BotState.IDLE,
             BotState.RESULT_WIN,
             BotState.RESULT_NO_WIN,
+            BotState.POST_RESULT_ANIMATION,
             BotState.BONUS_TEASE,
             BotState.BONUS_TRIGGERED,
         ):
             return BotState.READY_TO_SPIN, conf("spin_ready", 0.65), "spin_button_ready"
 
         if self.state in (BotState.RESULT_WIN, BotState.RESULT_NO_WIN):
+            if sig.reels_spinning and not sig.popup and not sig.spin_button_ready:
+                return (
+                    BotState.POST_RESULT_ANIMATION,
+                    max(conf("motion", 0.7), 0.6),
+                    "post_result_animation_motion",
+                )
             if sig.spin_button_ready:
                 return BotState.READY_TO_SPIN, conf("spin_ready", 0.6), "post_result_ready"
             if sig.post_result_ready_fallback:
                 return BotState.READY_TO_SPIN, conf("post_result_recovery", 0.45), "post_result_recovery_fallback"
+
+        if self.state == BotState.POST_RESULT_ANIMATION:
+            if sig.spin_button_ready:
+                return BotState.READY_TO_SPIN, conf("spin_ready", 0.6), "post_result_ready"
+            if sig.post_result_ready_fallback and not sig.reels_spinning:
+                return BotState.READY_TO_SPIN, conf("post_result_recovery", 0.45), "post_result_recovery_fallback"
+            if sig.reels_spinning and not sig.popup and not sig.spin_button_ready:
+                return BotState.POST_RESULT_ANIMATION, conf("motion", 0.7), "post_result_animation_active"
 
         if self.state == BotState.IDLE:
             return BotState.READY_TO_SPIN, 0.5, "bootstrap_ready"
