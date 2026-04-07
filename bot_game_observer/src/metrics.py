@@ -21,8 +21,19 @@ def build_summary(session_id: str, events: list[dict[str, Any]]) -> SessionSumma
     ended_at = _last_ts(events)
 
     spins = 0
+    spin_summaries = 0
     wins: list[int] = []
     no_wins = 0
+    visual_win_count = 0
+    any_payout_count = 0
+    real_win_count = 0
+    break_even_count = 0
+    net_loss_with_payout_count = 0
+    no_payout_count = 0
+    result_unknown_count = 0
+    click_to_spinning_timeout_count = 0
+    spinning_to_result_timeout_count = 0
+    result_to_ready_timeout_count = 0
     near_miss = 0
     bonus_tease = 0
     bonus_trig = 0
@@ -51,6 +62,31 @@ def build_summary(session_id: str, events: list[dict[str, Any]]) -> SessionSumma
 
         if et == SessionEventType.NO_WIN_DETECTED.value or et == "no_win_detected":
             no_wins += 1
+
+        if et == SessionEventType.SPIN_RESULT_SUMMARY.value or et == "spin_result_summary":
+            spin_summaries += 1
+            if payload.get("visual_win") is True:
+                visual_win_count += 1
+            if payload.get("any_payout") is True:
+                any_payout_count += 1
+            rc = payload.get("result_class")
+            if rc == "real_win":
+                real_win_count += 1
+            elif rc == "break_even":
+                break_even_count += 1
+            elif rc == "net_loss_with_payout":
+                net_loss_with_payout_count += 1
+            elif rc == "no_payout":
+                no_payout_count += 1
+            elif rc == "result_unknown":
+                result_unknown_count += 1
+            tmo = payload.get("timeouts") or {}
+            if tmo.get("click_to_spinning"):
+                click_to_spinning_timeout_count += 1
+            if tmo.get("spinning_to_result"):
+                spinning_to_result_timeout_count += 1
+            if tmo.get("result_to_ready"):
+                result_to_ready_timeout_count += 1
 
         if et == SessionEventType.NEAR_MISS_DETECTED.value or et == "near_miss_detected":
             near_miss += 1
@@ -95,14 +131,32 @@ def build_summary(session_id: str, events: list[dict[str, Any]]) -> SessionSumma
     if not wins and spins > 5:
         warnings.append("No wins detected; verify win_banner template and region.")
 
+    primary_spins = spin_summaries or spins
+    visual_win_rate = (visual_win_count / primary_spins) if primary_spins else 0.0
+    any_payout_rate = (any_payout_count / primary_spins) if primary_spins else 0.0
+    real_win_rate = (real_win_count / primary_spins) if primary_spins else 0.0
+
     return SessionSummary(
         session_id=session_id,
         started_at=started_at,
         ended_at=ended_at,
         duration_sec=duration_sec,
-        total_spins=spins,
+        total_spins=primary_spins,
         total_wins=len(wins),
         total_no_win=no_wins,
+        visual_win_count=visual_win_count,
+        any_payout_count=any_payout_count,
+        real_win_count=real_win_count,
+        break_even_count=break_even_count,
+        net_loss_with_payout_count=net_loss_with_payout_count,
+        no_payout_count=no_payout_count,
+        result_unknown_count=result_unknown_count,
+        click_to_spinning_timeout_count=click_to_spinning_timeout_count,
+        spinning_to_result_timeout_count=spinning_to_result_timeout_count,
+        result_to_ready_timeout_count=result_to_ready_timeout_count,
+        visual_win_rate=visual_win_rate,
+        any_payout_rate=any_payout_rate,
+        real_win_rate=real_win_rate,
         first_win_spin_index=first_win,
         spins_before_first_win=sbfw,
         gaps_between_wins=gap_tracking,

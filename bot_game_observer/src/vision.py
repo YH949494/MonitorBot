@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import cv2
@@ -95,6 +96,22 @@ def ocr_region_text(image_bgr: np.ndarray, region: Region, lang: str = "eng") ->
         return pytesseract.image_to_string(crop, config=cfg).strip()
     except Exception:
         return ""
+
+
+def parse_numeric_amount(text: str) -> tuple[float | None, float]:
+    cleaned = text.strip()
+    if not cleaned:
+        return None, 0.0
+    matches = re.findall(r"\d+(?:[.,]\d+)?", cleaned.replace(" ", ""))
+    if not matches:
+        return None, 0.0
+    raw = matches[-1].replace(",", ".")
+    try:
+        value = float(raw)
+    except ValueError:
+        return None, 0.0
+    confidence = min(1.0, len(raw) / max(1, len(cleaned)))
+    return value, confidence
 
 
 def detector_from_template(

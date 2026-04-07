@@ -60,3 +60,38 @@ def test_gaps_between_wins() -> None:
     ]
     s = build_summary("g", events)
     assert s.gaps_between_wins == [2]
+
+
+def test_spin_result_summary_counts_and_timeouts() -> None:
+    events = [
+        {"ts": "2026-04-06T10:00:00+00:00", "event_type": "spin_started", "payload": {}},
+        {
+            "ts": "2026-04-06T10:00:01+00:00",
+            "event_type": "spin_result_summary",
+            "payload": {
+                "visual_win": True,
+                "any_payout": None,
+                "result_class": "result_unknown",
+                "timeouts": {"click_to_spinning": True, "spinning_to_result": False, "result_to_ready": False},
+            },
+        },
+        {"ts": "2026-04-06T10:00:02+00:00", "event_type": "spin_started", "payload": {}},
+        {
+            "ts": "2026-04-06T10:00:03+00:00",
+            "event_type": "spin_result_summary",
+            "payload": {
+                "visual_win": False,
+                "any_payout": True,
+                "result_class": "real_win",
+                "timeouts": {"click_to_spinning": False, "spinning_to_result": True, "result_to_ready": True},
+            },
+        },
+    ]
+    s = build_summary("r", events)
+    assert s.visual_win_count == 1
+    assert s.any_payout_count == 1
+    assert s.real_win_count == 1
+    assert s.result_unknown_count == 1
+    assert s.click_to_spinning_timeout_count == 1
+    assert s.spinning_to_result_timeout_count == 1
+    assert s.result_to_ready_timeout_count == 1

@@ -71,6 +71,11 @@ detection:
   bonus_tease_cooldown_sec: 2.0
   popup_persist_frames: 45
   min_confidence_for_transition: 0.35
+  click_to_spinning_timeout_sec: 2.0
+  spinning_to_result_timeout_sec: 6.0
+  result_to_ready_timeout_sec: 4.0
+  payout_evidence_mode: false
+  payout_evidence_dir: logs/payout_evidence
   use_ocr_balance: false
   ocr_lang: eng
 

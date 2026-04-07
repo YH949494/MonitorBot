@@ -99,7 +99,7 @@ class GameStateMachine:
                     return BotState.RESULT_WIN, conf("win", 0.85), "win_template"
                 if sig.near_miss:
                     return BotState.RESULT_NO_WIN, conf("near_miss", 0.7), "near_miss_template"
-                return BotState.RESULT_NO_WIN, conf("no_win", 0.55), "no_win_default"
+                return BotState.RESULT_NO_WIN, conf("no_win", 0.55), "result_unknown_fallback"
 
         if sig.spin_button_ready and self.state in (
             BotState.IDLE,

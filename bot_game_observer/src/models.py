@@ -61,6 +61,12 @@ class DetectionConfig(BaseModel):
     bonus_tease_cooldown_sec: float = Field(default=2.0, ge=0.0)
     popup_persist_frames: int = Field(default=15, ge=1)
     min_confidence_for_transition: float = Field(default=0.35, ge=0.0, le=1.0)
+    # Watchdog timeouts to avoid hanging spin lifecycle states.
+    click_to_spinning_timeout_sec: float = Field(default=2.0, ge=0.1)
+    spinning_to_result_timeout_sec: float = Field(default=6.0, ge=0.1)
+    result_to_ready_timeout_sec: float = Field(default=4.0, ge=0.1)
+    payout_evidence_mode: bool = False
+    payout_evidence_dir: str = "logs/payout_evidence"
     use_ocr_balance: bool = False
     ocr_lang: str = "eng"
 
@@ -94,6 +100,8 @@ class GameRegions(BaseModel):
     popup_close: Region | None = Field(default=None)
     win_banner: Region | None = Field(default=None)
     bonus_indicator: Region | None = Field(default=None)
+    bet_text: Region | None = Field(default=None)
+    payout_text: Region | None = Field(default=None)
     balance_text: Region | None = Field(default=None)
     session_end: Region | None = Field(default=None)
 
@@ -162,6 +170,7 @@ class SessionEventType(str, Enum):
     ERROR = "error"
     FRAME_TICK = "frame_tick"
     CALIBRATION = "calibration"
+    SPIN_RESULT_SUMMARY = "spin_result_summary"
 
 
 class SessionEvent(BaseModel):
@@ -185,6 +194,19 @@ class SessionSummary(BaseModel):
     total_spins: int = 0
     total_wins: int = 0
     total_no_win: int = 0
+    visual_win_count: int = 0
+    any_payout_count: int = 0
+    real_win_count: int = 0
+    break_even_count: int = 0
+    net_loss_with_payout_count: int = 0
+    no_payout_count: int = 0
+    result_unknown_count: int = 0
+    click_to_spinning_timeout_count: int = 0
+    spinning_to_result_timeout_count: int = 0
+    result_to_ready_timeout_count: int = 0
+    visual_win_rate: float = 0.0
+    any_payout_rate: float = 0.0
+    real_win_rate: float = 0.0
     first_win_spin_index: int | None = None
     spins_before_first_win: int | None = None
     gaps_between_wins: list[int] = Field(default_factory=list)
