@@ -114,6 +114,7 @@ class SessionRunner:
         self._result_spin_button_ready_evidence_saved = False
         self._post_result_animation_since: float | None = None
         self._post_result_animation_reason: str | None = None
+        self._result_detected_mono: float | None = None
         self._error_count = 0
         self._armed_for_click = True
 
@@ -149,6 +150,7 @@ class SessionRunner:
         self._finalize_on_ready = False
         self._post_result_animation_since = None
         self._post_result_animation_reason = None
+        self._result_detected_mono = None
 
     def _save_evidence_crop(self, frame: FramePacket, region: Region | None, tag: str) -> None:
         if not self.settings.detection.payout_evidence_mode or self._active_spin is None or region is None:
@@ -168,9 +170,12 @@ class SessionRunner:
         payout: float | None = None,
         visual_win: bool | None = None,
         fallback_used: bool = False,
+        probable_win_signal: bool = False,
     ) -> None:
         if self._active_spin is None:
             return
+        if probable_win_signal:
+            self._active_spin.win_signal_detected = True
         payload = classify_spin_result(
             bet=self._active_spin.bet,
             payout=payout,
@@ -180,10 +185,15 @@ class SessionRunner:
         )
         for k, v in payload.items():
             setattr(self._active_spin, k, v)
+        if payout is None and probable_win_signal:
+            self._active_spin.result_kind = "win_unreadable"
         self._active_spin.chosen_payout_source = self._active_spin.payout_source
         self._active_spin.payout = payout
+        self._active_spin.payout_read_success = payout is not None
         self._active_spin.fallback_used = fallback_used
-        self._active_spin.ts_result_detected = _utcnow()
+        if self._active_spin.ts_result_detected is None:
+            self._active_spin.ts_result_detected = _utcnow()
+        self._normalize_spin_result_timestamps(self._active_spin)
         ev_payload = self._active_spin.model_dump(mode="json")
         ev_payload["type"] = SessionEventType.SPIN_RESULT_SUMMARY.value
         self._emit(SessionEventType.SPIN_RESULT_SUMMARY, ev_payload)
@@ -197,6 +207,39 @@ class SessionRunner:
         self._finalize_on_ready = False
         self._post_result_animation_since = None
         self._post_result_animation_reason = None
+        self._result_detected_mono = None
+
+    def _normalize_spin_result_timestamps(self, spin: SpinResult) -> None:
+        if spin.post_result_animation_duration_sec is not None:
+            spin.post_result_animation_duration_sec = max(0.0, spin.post_result_animation_duration_sec)
+        if spin.ts_result_detected and spin.ts_ready_detected and spin.ts_ready_detected < spin.ts_result_detected:
+            log.warning(
+                "spin timestamp normalization applied spin=%s ts_result=%s ts_ready=%s",
+                spin.spin_index,
+                spin.ts_result_detected.isoformat(),
+                spin.ts_ready_detected.isoformat(),
+            )
+            spin.ts_ready_detected = spin.ts_result_detected
+
+    def _detect_probable_win_signal(self, sig: FrameSignals) -> bool:
+        if self._active_spin is None:
+            return False
+        if sig.win or self._active_spin.visual_win:
+            return True
+        if sig.bonus_trigger or self._post_result_animation_reason == "bonus_feature_animation":
+            return True
+        return False
+
+    def _should_defer_ready_finalize(self, probable_win_signal: bool) -> bool:
+        if self._active_spin is None or self._active_spin.payout is not None:
+            return False
+        if not probable_win_signal or self._result_detected_mono is None:
+            return False
+        elapsed = time.monotonic() - self._result_detected_mono
+        return (
+            elapsed < self.settings.detection.payout_read_retry_window_sec
+            and self._active_spin.payout_read_attempts < self.settings.detection.payout_read_max_attempts
+        )
 
     def _read_amount(self, frame: FramePacket, region: Region | None) -> tuple[float | None, float]:
         if region is None:
@@ -218,6 +261,16 @@ class SessionRunner:
             return
 
         regs = self.settings.regions
+        self._active_spin.win_signal_detected = self._active_spin.win_signal_detected or self._detect_probable_win_signal(sig)
+        now_mono = time.monotonic()
+        if self._result_detected_mono is None:
+            self._result_detected_mono = now_mono
+        if (now_mono - self._result_detected_mono) < self.settings.detection.payout_read_delay_sec:
+            return
+        if (now_mono - self._result_detected_mono) >= self.settings.detection.payout_read_retry_window_sec:
+            return
+        if self._active_spin.payout_read_attempts >= self.settings.detection.payout_read_max_attempts:
+            return
         self._active_spin.payout_resolution_attempts += 1
         if self._active_spin.bet is None:
             self._save_evidence_crop(frame, regs.bet_text, "sample_bet")
@@ -231,6 +284,7 @@ class SessionRunner:
                 self._active_spin.chosen_bet_source = "ocr"
 
         self._save_evidence_crop(frame, regs.payout_text, "sample_payout")
+        self._active_spin.payout_read_attempts += 1
         payout_text = vision.ocr_region_text(frame.image_bgr, regs.payout_text, lang=self.settings.detection.ocr_lang) if regs.payout_text else ""
         if payout_text:
             self._active_spin.raw_payout_ocr_samples.append(payout_text)
@@ -246,6 +300,7 @@ class SessionRunner:
                 self._active_spin.confidence_payout = stable_conf
                 self._active_spin.detector_status = "confirmed"
                 self._active_spin.reason = "payout_read_success"
+                self._active_spin.payout_read_success = True
 
         if self.settings.detection.use_ocr_balance:
             self._save_evidence_crop(frame, regs.balance_text, "sample_balance")
@@ -575,8 +630,10 @@ class SessionRunner:
                 self._result_spin_button_ready_evidence_saved = False
                 self._post_result_animation_since = None
                 self._post_result_animation_reason = None
+                self._result_detected_mono = time.monotonic()
                 if self._active_spin is not None:
                     self._active_spin.result_kind = "win" if r.to_state == BotState.RESULT_WIN else "no_win"
+                    self._active_spin.ts_result_detected = r.ts
                     self._active_spin.post_result_animation_started_at = r.ts
             if r.to_state == BotState.POST_RESULT_ANIMATION:
                 now_mono = time.monotonic()
@@ -747,10 +804,16 @@ class SessionRunner:
                     self._result_evidence_saved = True
                 self._update_payout_resolution(frame, sig)
                 if self._finalize_on_ready and self._active_spin is not None and self.sm.state == BotState.READY_TO_SPIN:
+                    probable_win_signal = self._detect_probable_win_signal(sig)
+                    self._active_spin.win_signal_detected = self._active_spin.win_signal_detected or probable_win_signal
+                    if self._should_defer_ready_finalize(probable_win_signal):
+                        continue
                     self._save_evidence_crop(frame, self.settings.regions.bet_text, "ready_bet")
                     self._save_evidence_crop(frame, self.settings.regions.payout_text, "ready_payout")
                     self._save_evidence_crop(frame, self.settings.regions.balance_text, "ready_balance")
                     finalize_reason = self._active_spin.reason if self._active_spin.payout is not None else "payout_not_readable"
+                    if self._active_spin.payout is None and probable_win_signal:
+                        finalize_reason = "win_unreadable"
                     if self._post_result_animation_reason:
                         finalize_reason = self._post_result_animation_reason
                     self._finalize_spin_result(
@@ -759,6 +822,7 @@ class SessionRunner:
                         payout=self._active_spin.payout,
                         visual_win=self._active_spin.visual_win,
                         fallback_used=self._active_spin.payout is None,
+                        probable_win_signal=probable_win_signal,
                     )
                 self._check_spin_timeouts(sig, frame)
 
