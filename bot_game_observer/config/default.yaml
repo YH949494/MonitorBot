@@ -1,5 +1,5 @@
 game_profile: generic_reel_game
-calibrated: false
+calibrated: true
 
 capture:
   mode: region
@@ -13,6 +13,21 @@ capture:
   coordinate_mode: relative_to_capture
 
 regions:
+  payout_text:
+    left: 75
+    top: 488
+    width: 595
+    height: 84
+  balance_text:
+    left: 75
+    top: 488
+    width: 595
+    height: 84
+  bet_text:
+    left: 75
+    top: 488
+    width: 595
+    height: 84
   spin_button:
     left: 1100
     top: 620
@@ -64,8 +79,8 @@ templates:
 
 detection:
   spinning_motion_threshold: 12.0
-  stopped_consecutive_frames: 3
-  state_debounce_frames: 2
+  stopped_consecutive_frames: 2
+  state_debounce_frames: 1
   motion_history_frames: 3
   near_miss_cooldown_sec: 2.0
   bonus_tease_cooldown_sec: 2.0
@@ -73,21 +88,21 @@ detection:
   min_confidence_for_transition: 0.35
   click_to_spinning_timeout_sec: 2.0
   spinning_to_result_timeout_sec: 6.0
-  result_to_ready_timeout_sec: 4.0
+  result_to_ready_timeout_sec: 6.0
   result_animation_timeout_sec: 12.0
   post_result_normal_threshold_sec: 1.0
   post_result_long_animation_threshold_sec: 3.0
   post_result_bonus_like_threshold_sec: 6.0
-  payout_read_delay_sec: 0.25
-  payout_read_retry_window_sec: 1.0
-  payout_read_max_attempts: 5
+  payout_read_delay_sec: 0.0
+  payout_read_retry_window_sec: 2.5
+  payout_read_max_attempts: 10
   payout_evidence_mode: false
   payout_evidence_dir: logs/payout_evidence
-  use_ocr_balance: false
+  use_ocr_balance: true
   ocr_lang: eng
 
 automation:
-  enable_clicking: false
+  enable_clicking: true
   click_jitter_px: 6
   min_delay_sec: 0.8
   max_delay_sec: 1.8
