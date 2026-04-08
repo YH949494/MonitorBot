@@ -92,8 +92,11 @@ def ocr_region_text(image_bgr: np.ndarray, region: Region, lang: str = "eng") ->
     if crop.size == 0:
         return ""
     try:
+        preprocessed = to_gray(crop)
+        preprocessed = cv2.resize(preprocessed, None, fx=3.0, fy=3.0, interpolation=cv2.INTER_CUBIC)
+        _threshold, preprocessed = cv2.threshold(preprocessed, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         cfg = f"--psm 7 -l {lang}"
-        return pytesseract.image_to_string(crop, config=cfg).strip()
+        return pytesseract.image_to_string(preprocessed, config=cfg).strip()
     except Exception:
         return ""
 
