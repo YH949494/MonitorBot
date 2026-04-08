@@ -1,2 +1,0 @@
-session_id,started_at,ended_at,duration_sec,total_spins,total_wins,total_no_win,first_win_spin_index,spins_before_first_win,gaps_between_wins,avg_spins_between_wins,max_spins_between_wins,near_miss_count,near_miss_rate,bonus_tease_count,bonus_trigger_count,end_reason,consecutive_no_win_streak_max,total_wins_currency,total_losses_currency,confidence_notes,warnings
-00000000-0000-0000-0000-000000000001,2026-04-06T12:00:00+00:00,2026-04-06T12:30:00+00:00,1800.0,5,1,1,2,1,1,1.0,1,1,0.3333,1,0,max_duration,3,,,,
