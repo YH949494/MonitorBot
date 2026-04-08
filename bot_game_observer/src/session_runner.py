@@ -123,7 +123,9 @@ class SessionRunner:
         self._panic_path = self._resolve_panic_path(settings.automation.panic_stop_file)
         self._payout_evidence_dir = resolve_path_relative_to_app(settings.detection.payout_evidence_dir)
         self._session_frames_dir = logs_path("sessions", self.session_id, "frames")
+        self._session_debug_dir = logs_path("sessions", self.session_id, "debug")
         self._last_symbol_capture_by_reason: dict[str, float] = {}
+        self._symbol_debug_saved_spins = 0
 
     def _classify_post_result_visual(self, duration_sec: float, bonus_like_signal: bool) -> str:
         det = self.settings.detection
@@ -172,6 +174,52 @@ class SessionRunner:
         reels_bgr = self._crop_rel(frame, self.settings.regions.reels)
         reels_gray = vision.to_gray(reels_bgr)
         det_cfg = self.settings.detection
+        scatter_spec = self.settings.templates.get("scatter_symbol")
+        scatter_tmpl = self._tmpl_cache.get("scatter_symbol")
+        scatter_threshold = scatter_spec.threshold if scatter_spec is not None else None
+        scatter_template_shape = (
+            [int(scatter_tmpl.shape[0]), int(scatter_tmpl.shape[1])]
+            if scatter_tmpl is not None and hasattr(scatter_tmpl, "shape") and len(scatter_tmpl.shape) >= 2
+            else None
+        )
+        reels_shape = (
+            [int(reels_gray.shape[0]), int(reels_gray.shape[1])]
+            if hasattr(reels_gray, "shape") and len(reels_gray.shape) >= 2
+            else None
+        )
+        scatter_debug_best_score: float | None = None
+        scatter_debug_best_loc: list[int] | None = None
+        scatter_debug_ran = False
+        scatter_debug_reason: str | None = None
+        try:
+            if scatter_spec is None:
+                scatter_debug_reason = "missing_template_spec"
+            elif scatter_tmpl is None:
+                scatter_debug_reason = "missing_template_image"
+            elif (
+                not hasattr(scatter_tmpl, "shape")
+                or len(scatter_tmpl.shape) < 2
+                or int(scatter_tmpl.shape[0]) <= 0
+                or int(scatter_tmpl.shape[1]) <= 0
+            ):
+                scatter_debug_reason = "invalid_template"
+            elif (
+                not hasattr(reels_gray, "shape")
+                or len(reels_gray.shape) < 2
+                or int(reels_gray.shape[0]) <= 0
+                or int(reels_gray.shape[1]) <= 0
+            ):
+                scatter_debug_reason = "invalid_reels_crop"
+            elif int(scatter_tmpl.shape[0]) > int(reels_gray.shape[0]) or int(scatter_tmpl.shape[1]) > int(reels_gray.shape[1]):
+                scatter_debug_reason = "template_larger_than_scene"
+            else:
+                best_score, best_loc = vision.template_match_best(reels_gray, scatter_tmpl)
+                scatter_debug_best_score = float(best_score)
+                scatter_debug_best_loc = [int(best_loc[0]), int(best_loc[1])]
+                scatter_debug_ran = True
+                scatter_debug_reason = "match_scored"
+        except Exception:
+            scatter_debug_reason = "exception"
 
         def _detect(name: str) -> tuple[int | None, bool, list[dict[str, int]] | None, list[float] | None]:
             spec = self.settings.templates.get(name)
@@ -228,6 +276,10 @@ class SessionRunner:
         should_capture = bool(reason_flags)
         frame_rel_path: str | None = None
         frame_ts: str | None = None
+        debug_reels_path: str | None = None
+        symbol_debug_mode = bool(getattr(det_cfg, "symbol_debug_mode", False))
+        symbol_debug_max_spins = max(0, int(getattr(det_cfg, "symbol_debug_max_spins", 10)))
+        symbol_debug_save_reels_crop = bool(getattr(det_cfg, "symbol_debug_save_reels_crop", True))
         if should_capture:
             primary = reason_flags[0]
             now = time.monotonic()
@@ -284,6 +336,18 @@ class SessionRunner:
                 frame_rel_path = str(Path("logs") / "sessions" / self.session_id / "frames" / filename)
                 frame_ts = frame.ts.isoformat()
                 self._last_symbol_capture_by_reason[primary] = now
+        if (
+            symbol_debug_mode
+            and symbol_debug_save_reels_crop
+            and self._symbol_debug_saved_spins < symbol_debug_max_spins
+            and reels_bgr.size > 0
+        ):
+            self._session_debug_dir.mkdir(parents=True, exist_ok=True)
+            debug_name = f"spin_{self._active_spin.spin_index:04d}_reels_debug.png"
+            debug_out = self._session_debug_dir / debug_name
+            if cv2.imwrite(str(debug_out), reels_bgr):
+                debug_reels_path = str(Path("logs") / "sessions" / self.session_id / "debug" / debug_name)
+                self._symbol_debug_saved_spins += 1
 
         return {
             "scatter_count": scatter_count,
@@ -301,6 +365,16 @@ class SessionRunner:
             "scatter_match_scores": scatter_scores,
             "bonus_match_scores": bonus_scores,
             "symbol_detection_reason_flags": reason_flags or None,
+            "scatter_debug_template_present": scatter_tmpl is not None,
+            "scatter_debug_template_shape": scatter_template_shape,
+            "scatter_debug_reels_shape": reels_shape,
+            "scatter_debug_best_score": scatter_debug_best_score,
+            "scatter_debug_best_loc": scatter_debug_best_loc,
+            "scatter_debug_threshold": scatter_threshold,
+            "scatter_debug_frame_index": frame.frame_index,
+            "scatter_debug_ran": scatter_debug_ran,
+            "scatter_debug_reason": scatter_debug_reason,
+            "scatter_debug_reels_path": debug_reels_path,
         }
 
     def _finalize_spin_result(

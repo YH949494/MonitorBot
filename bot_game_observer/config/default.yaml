@@ -113,6 +113,9 @@ detection:
   symbol_match_center_merge_px: 24
   symbol_max_count_cap: 12
   symbol_capture_cooldown_sec: 2.0
+  symbol_debug_mode: false
+  symbol_debug_max_spins: 10
+  symbol_debug_save_reels_crop: true
   use_ocr_balance: true
   ocr_lang: eng
 
