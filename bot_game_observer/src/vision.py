@@ -219,3 +219,63 @@ def detector_from_template(
         confidence=score,
         detail={"loc": loc, "threshold": threshold},
     )
+
+
+def template_match_locations(
+    scene_gray: np.ndarray,
+    tmpl_gray: np.ndarray | None,
+    threshold: float,
+    *,
+    max_matches: int = 12,
+    iou_threshold: float = 0.3,
+    center_merge_px: int = 0,
+) -> tuple[bool, list[dict[str, int]], list[float]]:
+    """Return deduplicated template matches above threshold as compact boxes/scores."""
+    if tmpl_gray is None or tmpl_gray.size == 0 or scene_gray.size == 0:
+        return False, [], []
+    th, tw = tmpl_gray.shape[:2]
+    sh, sw = scene_gray.shape[:2]
+    if th > sh or tw > sw:
+        return False, [], []
+
+    res = cv2.matchTemplate(scene_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED)
+    ys, xs = np.where(res >= float(threshold))
+    if len(xs) == 0:
+        return True, [], []
+
+    candidates: list[tuple[float, int, int, int, int]] = []
+    for x, y in zip(xs.tolist(), ys.tolist()):
+        score = float(res[y, x])
+        candidates.append((score, int(x), int(y), int(tw), int(th)))
+    candidates.sort(key=lambda c: c[0], reverse=True)
+
+    def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+        ax, ay, aw, ah = a
+        bx, by, bw, bh = b
+        ix1, iy1 = max(ax, bx), max(ay, by)
+        ix2, iy2 = min(ax + aw, bx + bw), min(ay + ah, by + bh)
+        iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+        inter = iw * ih
+        if inter <= 0:
+            return 0.0
+        union = aw * ah + bw * bh - inter
+        return 0.0 if union <= 0 else float(inter / union)
+
+    picked_boxes: list[dict[str, int]] = []
+    picked_scores: list[float] = []
+    picked_rects: list[tuple[int, int, int, int]] = []
+    picked_centers_x: list[float] = []
+    for score, x, y, w, h in candidates:
+        rect = (x, y, w, h)
+        if any(_iou(rect, p) > iou_threshold for p in picked_rects):
+            continue
+        cx = x + (w / 2.0)
+        if center_merge_px > 0 and any(abs(cx - existing) <= center_merge_px for existing in picked_centers_x):
+            continue
+        picked_rects.append(rect)
+        picked_centers_x.append(cx)
+        picked_boxes.append({"x": x, "y": y, "w": w, "h": h})
+        picked_scores.append(round(score, 4))
+        if len(picked_boxes) >= max_matches:
+            break
+    return True, picked_boxes, picked_scores

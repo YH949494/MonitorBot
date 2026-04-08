@@ -74,6 +74,15 @@ class DetectionConfig(BaseModel):
     payout_read_max_attempts: int = Field(default=5, ge=1)
     payout_evidence_mode: bool = False
     payout_evidence_dir: str = "logs/payout_evidence"
+    scatter_trigger_count: int = Field(default=4, ge=1)
+    bonus_trigger_count: int = Field(default=4, ge=1)
+    scatter_min_count_for_signal: int = Field(default=2, ge=1)
+    bonus_min_count_for_signal: int = Field(default=2, ge=1)
+    scatter_min_score_for_signal: float = Field(default=0.96, ge=0.0, le=1.0)
+    bonus_min_score_for_signal: float = Field(default=0.96, ge=0.0, le=1.0)
+    symbol_match_center_merge_px: int = Field(default=24, ge=0)
+    symbol_max_count_cap: int = Field(default=12, ge=1)
+    symbol_capture_cooldown_sec: float = Field(default=2.0, ge=0.0)
     use_ocr_balance: bool = False
     ocr_lang: str = "eng"
 
