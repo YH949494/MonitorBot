@@ -278,10 +278,6 @@ class SessionRunner:
         self._active_spin.win_signal_detected = self._active_spin.win_signal_detected or self._detect_probable_win_signal(sig)
         now_mono = time.monotonic()
         if self._result_detected_mono is None:
-            self._result_detected_mono = now_mono
-        if self._awaiting_ready_since is None and not (
-            self._finalize_on_ready and self.sm.state == BotState.READY_TO_SPIN
-        ):
             self._append_sampling_diag(
                 "payout",
                 {"code": "sampling_skipped_state", "ts_mono": now_mono},
@@ -718,6 +714,18 @@ class SessionRunner:
                     self._active_spin.result_kind = "win" if r.to_state == BotState.RESULT_WIN else "no_win"
                     self._active_spin.ts_result_detected = r.ts
                     self._active_spin.post_result_animation_started_at = r.ts
+            if r.from_state == BotState.SPINNING and r.to_state == BotState.READY_TO_SPIN:
+                self._emit(SessionEventType.SPIN_STOPPED, {"spin_index": self._spin_counter})
+                self._spinning_since = None
+                self._awaiting_ready_since = time.monotonic()
+                self._result_recovery_stable_frames = 0
+                self._result_ready_debug_frames.clear()
+                self._result_spin_button_ready_evidence_saved = False
+                self._post_result_animation_since = None
+                self._post_result_animation_reason = None
+                self._result_detected_mono = time.monotonic()
+                if self._active_spin is not None:
+                    self._active_spin.ts_result_detected = r.ts
             if r.to_state == BotState.POST_RESULT_ANIMATION:
                 now_mono = time.monotonic()
                 if self._post_result_animation_since is None:
@@ -887,6 +895,13 @@ class SessionRunner:
                     self._result_evidence_saved = True
                 self._update_payout_resolution(frame, sig)
                 if self._finalize_on_ready and self._active_spin is not None and self.sm.state == BotState.READY_TO_SPIN:
+                    if (
+                        self._result_detected_mono is not None
+                        and self._active_spin.payout_read_attempts == 0
+                        and (time.monotonic() - self._result_detected_mono)
+                        < self.settings.detection.payout_read_retry_window_sec
+                    ):
+                        continue
                     probable_win_signal = self._detect_probable_win_signal(sig)
                     self._active_spin.win_signal_detected = self._active_spin.win_signal_detected or probable_win_signal
                     if self._should_defer_ready_finalize(probable_win_signal):

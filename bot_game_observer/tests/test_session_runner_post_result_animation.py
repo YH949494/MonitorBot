@@ -355,7 +355,7 @@ def test_click_timeout_suppressed_by_motion_only_spin_start_evidence(monkeypatch
 def test_sampling_diag_dedupes_repeated_state_and_window_codes(monkeypatch) -> None:
     runner, _events = _make_runner()
     runner._active_spin = SpinResult(spin_index=11, visual_win=False, result_kind="no_win")
-    runner._result_detected_mono = 100.0
+    runner._result_detected_mono = None
     runner._awaiting_ready_since = None
     frame = FramePacket(ts=datetime.now(timezone.utc), frame_index=2, image_bgr=np.zeros((4, 4, 3), dtype=np.uint8))
     sig = _make_sig(motion=0.0, spin_button_ready=False)
@@ -366,12 +366,35 @@ def test_sampling_diag_dedupes_repeated_state_and_window_codes(monkeypatch) -> N
     skipped = [d for d in runner._active_spin.payout_sampling_diagnostics if d.get("code") == "sampling_skipped_state"]
     assert len(skipped) == 1
 
-    runner._awaiting_ready_since = 100.0
+    runner._result_detected_mono = 100.0
     monkeypatch.setattr("src.session_runner.time.monotonic", lambda: 101.5)
     runner._update_payout_resolution(frame, sig)
     runner._update_payout_resolution(frame, sig)
     expired = [d for d in runner._active_spin.payout_sampling_diagnostics if d.get("code") == "sampling_window_expired"]
     assert len(expired) == 1
+
+
+def test_spinning_to_ready_starts_sampling_window_without_result_state(monkeypatch) -> None:
+    runner, events = _make_runner()
+    runner.sm.state = BotState.READY_TO_SPIN
+    runner._active_spin = SpinResult(spin_index=13, visual_win=False)
+    rec = [
+        SimpleNamespace(
+            from_state=BotState.SPINNING,
+            to_state=BotState.READY_TO_SPIN,
+            reason="spin_button_ready",
+            confidence=0.9,
+            frame_index=4,
+            ts=datetime.now(timezone.utc),
+            detail={},
+        )
+    ]
+    monkeypatch.setattr("src.session_runner.time.monotonic", lambda: 120.0)
+    runner._handle_transitions(rec)
+    assert runner._awaiting_ready_since == 120.0
+    assert runner._result_detected_mono == 120.0
+    assert runner._finalize_on_ready is True
+    assert any(et == SessionEventType.SPIN_STOPPED for et, _payload in events)
 
 
 def test_balance_delta_fallback_uses_staged_before_after_samples(monkeypatch) -> None:
