@@ -87,8 +87,8 @@ def ocr_region_text(image_bgr: np.ndarray, region: Region, lang: str = "eng") ->
     """Optional OCR via pytesseract; returns empty string if unavailable."""
     try:
         import pytesseract
-         pytesseract.pytesseract.tesseract_cmd = r"C:\Users\user1\Downloads\MonitorBot-main (1)\MonitorBot-main\bot_game_observer\tesseract-main\tesseract-main\tesseract.exe"
-         os.environ["TESSDATA_PREFIX"] = r"C:\Users\user1\Downloads\MonitorBot-main (1)\MonitorBot-main\bot_game_observer\tesseract-main\tesseract-main\tessdata"
+        pytesseract.pytesseract.tesseract_cmd = r"C:\Users\user1\Downloads\MonitorBot-main (1)\MonitorBot-main\bot_game_observer\tesseract-main\tesseract-main\tesseract.exe"
+        os.environ["TESSDATA_PREFIX"] = r"C:\Users\user1\Downloads\MonitorBot-main (1)\MonitorBot-main\bot_game_observer\tesseract-main\tesseract-main\tessdata"
     except ImportError:
         return ""
     crop = crop_region(image_bgr, region)
