@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
@@ -86,15 +87,21 @@ def ocr_region_text(image_bgr: np.ndarray, region: Region, lang: str = "eng") ->
     """Optional OCR via pytesseract; returns empty string if unavailable."""
     try:
         import pytesseract
+         pytesseract.pytesseract.tesseract_cmd = r"C:\Users\user1\Downloads\MonitorBot-main (1)\MonitorBot-main\bot_game_observer\tesseract-main\tesseract-main\tesseract.exe"
+         os.environ["TESSDATA_PREFIX"] = r"C:\Users\user1\Downloads\MonitorBot-main (1)\MonitorBot-main\bot_game_observer\tesseract-main\tesseract-main\tessdata"
     except ImportError:
         return ""
     crop = crop_region(image_bgr, region)
     if crop.size == 0:
         return ""
+    gray = to_gray(crop)
+    upscaled = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+    _th, processed = cv2.threshold(upscaled, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     try:
         cfg = f"--psm 7 -l {lang}"
-        return pytesseract.image_to_string(crop, config=cfg).strip()
-    except Exception:
+        return pytesseract.image_to_string(processed, config=cfg).strip()
+    except Exception as exc:
+        print(f"OCR failed: {exc}")
         return ""
 
 
