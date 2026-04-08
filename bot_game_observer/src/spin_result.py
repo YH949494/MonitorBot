@@ -74,6 +74,22 @@ class SpinResult(BaseModel):
     confidence_motion: float | None = None
     confidence_ready: float | None = None
 
+    scatter_count: int | None = None
+    bonus_count: int | None = None
+    scatter_detect_ok: bool = False
+    bonus_detect_ok: bool = False
+    scatter_near_miss: bool = False
+    bonus_tease: bool = False
+    scatter_trigger_count: int | None = None
+    bonus_trigger_count: int | None = None
+    symbol_detection_frame_path: str | None = None
+    symbol_detection_frame_ts: str | None = None
+    scatter_boxes: list[dict[str, int]] | None = None
+    bonus_boxes: list[dict[str, int]] | None = None
+    scatter_match_scores: list[float] | None = None
+    bonus_match_scores: list[float] | None = None
+    symbol_detection_reason_flags: list[str] | None = None
+
     fallback_used: bool = False
     timeouts: SpinTimeouts = Field(default_factory=SpinTimeouts)
 

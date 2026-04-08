@@ -73,6 +73,12 @@ templates:
   near_miss:
     path: assets/templates/near_miss.png
     threshold: 0.84
+  scatter_symbol:
+    path: assets/templates/scatter_symbol.png
+    threshold: 0.93
+  bonus_symbol:
+    path: assets/templates/bonus_symbol.png
+    threshold: 0.93
   session_end:
     path: assets/templates/session_end.png
     threshold: 0.88
@@ -98,6 +104,15 @@ detection:
   payout_read_max_attempts: 10
   payout_evidence_mode: false
   payout_evidence_dir: logs/payout_evidence
+  scatter_trigger_count: 4
+  bonus_trigger_count: 4
+  scatter_min_count_for_signal: 2
+  bonus_min_count_for_signal: 2
+  scatter_min_score_for_signal: 0.96
+  bonus_min_score_for_signal: 0.96
+  symbol_match_center_merge_px: 24
+  symbol_max_count_cap: 12
+  symbol_capture_cooldown_sec: 2.0
   use_ocr_balance: true
   ocr_lang: eng
 

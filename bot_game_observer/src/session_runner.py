@@ -31,7 +31,7 @@ from .spin_result import DetectorStatus, SpinResult, classify_spin_result
 from .templates import load_template_grayscale
 from . import vision
 from .metrics import build_summary
-from .app_paths import resolve_path_relative_to_app
+from .app_paths import logs_path, resolve_path_relative_to_app
 from .utils import random_delay
 
 log = get_logger(__name__)
@@ -122,6 +122,8 @@ class SessionRunner:
         self._logs: list[dict[str, Any]] = []
         self._panic_path = self._resolve_panic_path(settings.automation.panic_stop_file)
         self._payout_evidence_dir = resolve_path_relative_to_app(settings.detection.payout_evidence_dir)
+        self._session_frames_dir = logs_path("sessions", self.session_id, "frames")
+        self._last_symbol_capture_by_reason: dict[str, float] = {}
 
     def _classify_post_result_visual(self, duration_sec: float, bonus_like_signal: bool) -> str:
         det = self.settings.detection
@@ -163,6 +165,143 @@ class SessionRunner:
         self._payout_evidence_dir.mkdir(parents=True, exist_ok=True)
         out = self._payout_evidence_dir / f"spin_{self._active_spin.spin_index}_{tag}_f{frame.frame_index}.png"
         cv2.imwrite(str(out), crop)
+
+    def _detect_symbol_observations(self, frame: FramePacket) -> dict[str, Any]:
+        if self._active_spin is None:
+            return {}
+        reels_bgr = self._crop_rel(frame, self.settings.regions.reels)
+        reels_gray = vision.to_gray(reels_bgr)
+        det_cfg = self.settings.detection
+
+        def _detect(name: str) -> tuple[int | None, bool, list[dict[str, int]] | None, list[float] | None]:
+            spec = self.settings.templates.get(name)
+            if spec is None:
+                return None, False, None, None
+            if spec.threshold <= 0:
+                return None, False, None, None
+            tmpl = self._tmpl_cache.get(name)
+            ok, boxes, scores = vision.template_match_locations(
+                reels_gray,
+                tmpl,
+                spec.threshold,
+                max_matches=det_cfg.symbol_max_count_cap,
+                center_merge_px=det_cfg.symbol_match_center_merge_px,
+            )
+            if not ok:
+                return None, False, None, None
+            return len(boxes), True, boxes, scores
+
+        scatter_count, scatter_ok, scatter_boxes, scatter_scores = _detect("scatter_symbol")
+        bonus_count, bonus_ok, bonus_boxes, bonus_scores = _detect("bonus_symbol")
+        scatter_near_miss = (
+            scatter_ok is True
+            and det_cfg.scatter_trigger_count is not None
+            and scatter_count == det_cfg.scatter_trigger_count - 1
+        )
+        bonus_tease = (
+            bonus_ok is True
+            and det_cfg.bonus_trigger_count is not None
+            and bonus_count == det_cfg.bonus_trigger_count - 1
+        )
+        scatter_detected = (
+            scatter_ok is True
+            and scatter_count is not None
+            and scatter_count >= det_cfg.scatter_min_count_for_signal
+            and any(s >= det_cfg.scatter_min_score_for_signal for s in (scatter_scores or []))
+        )
+        bonus_detected = (
+            bonus_ok is True
+            and bonus_count is not None
+            and bonus_count >= det_cfg.bonus_min_count_for_signal
+            and any(s >= det_cfg.bonus_min_score_for_signal for s in (bonus_scores or []))
+        )
+        reason_flags: list[str] = []
+        if scatter_detected:
+            reason_flags.append("scatter_detected")
+        if bonus_detected:
+            reason_flags.append("bonus_detected")
+        if scatter_near_miss:
+            reason_flags.append("scatter_near_miss")
+        if bonus_tease:
+            reason_flags.append("bonus_tease")
+
+        should_capture = bool(reason_flags)
+        frame_rel_path: str | None = None
+        frame_ts: str | None = None
+        if should_capture:
+            primary = reason_flags[0]
+            now = time.monotonic()
+            last_ts = self._last_symbol_capture_by_reason.get(primary, 0.0)
+            if (now - last_ts) >= det_cfg.symbol_capture_cooldown_sec:
+                self._session_frames_dir.mkdir(parents=True, exist_ok=True)
+                filename = f"spin_{self._active_spin.spin_index:04d}_{primary}.png"
+                out = self._session_frames_dir / filename
+                image_to_save = reels_bgr.copy()
+                if scatter_boxes:
+                    for idx, box in enumerate(scatter_boxes):
+                        cv2.rectangle(
+                            image_to_save,
+                            (box["x"], box["y"]),
+                            (box["x"] + box["w"], box["y"] + box["h"]),
+                            (0, 255, 0),
+                            2,
+                        )
+                        score = (scatter_scores or [None] * len(scatter_boxes))[idx]
+                        lbl = "SCATTER" if score is None else f"SCATTER {score:.2f}"
+                        cv2.putText(
+                            image_to_save,
+                            lbl,
+                            (box["x"], max(10, box["y"] - 4)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.4,
+                            (0, 255, 0),
+                            1,
+                            cv2.LINE_AA,
+                        )
+                if bonus_boxes:
+                    for idx, box in enumerate(bonus_boxes):
+                        cv2.rectangle(
+                            image_to_save,
+                            (box["x"], box["y"]),
+                            (box["x"] + box["w"], box["y"] + box["h"]),
+                            (0, 165, 255),
+                            2,
+                        )
+                        score = (bonus_scores or [None] * len(bonus_boxes))[idx]
+                        lbl = "BONUS" if score is None else f"BONUS {score:.2f}"
+                        cv2.putText(
+                            image_to_save,
+                            lbl,
+                            (box["x"], max(10, box["y"] - 4)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.4,
+                            (0, 165, 255),
+                            1,
+                            cv2.LINE_AA,
+                        )
+                if not out.exists():
+                    cv2.imwrite(str(out), image_to_save)
+                frame_rel_path = str(Path("logs") / "sessions" / self.session_id / "frames" / filename)
+                frame_ts = frame.ts.isoformat()
+                self._last_symbol_capture_by_reason[primary] = now
+
+        return {
+            "scatter_count": scatter_count,
+            "bonus_count": bonus_count,
+            "scatter_detect_ok": scatter_ok,
+            "bonus_detect_ok": bonus_ok,
+            "scatter_near_miss": scatter_near_miss,
+            "bonus_tease": bonus_tease,
+            "scatter_trigger_count": det_cfg.scatter_trigger_count,
+            "bonus_trigger_count": det_cfg.bonus_trigger_count,
+            "symbol_detection_frame_path": frame_rel_path,
+            "symbol_detection_frame_ts": frame_ts,
+            "scatter_boxes": scatter_boxes,
+            "bonus_boxes": bonus_boxes,
+            "scatter_match_scores": scatter_scores,
+            "bonus_match_scores": bonus_scores,
+            "symbol_detection_reason_flags": reason_flags or None,
+        }
 
     def _finalize_spin_result(
         self,
@@ -914,6 +1053,9 @@ class SessionRunner:
                         finalize_reason = "win_unreadable"
                     if self._post_result_animation_reason:
                         finalize_reason = self._post_result_animation_reason
+                    observation_payload = self._detect_symbol_observations(frame)
+                    for key, value in observation_payload.items():
+                        setattr(self._active_spin, key, value)
                     self._finalize_spin_result(
                         detector_status=self._active_spin.detector_status,
                         reason=finalize_reason,
