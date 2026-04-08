@@ -1,9 +1,0 @@
-2026-04-08 14:03:07,120 | INFO | bot_game_observer | Startup mode: frozen
-2026-04-08 14:03:07,124 | INFO | bot_game_observer | Portable app root: C:\Users\user1\Downloads\MonitorBot-main (1)\MonitorBot-main\bot_game_observer\dist
-2026-04-08 14:03:07,125 | INFO | bot_game_observer | Config: C:\Users\user1\Downloads\MonitorBot-main (1)\MonitorBot-main\bot_game_observer\dist\config\settings.json
-2026-04-08 14:03:07,126 | INFO | bot_game_observer | Data dir: C:\Users\user1\Downloads\MonitorBot-main (1)\MonitorBot-main\bot_game_observer\dist\data
-2026-04-08 14:03:07,127 | INFO | bot_game_observer | Logs dir: C:\Users\user1\Downloads\MonitorBot-main (1)\MonitorBot-main\bot_game_observer\dist\logs
-2026-04-08 14:03:07,128 | INFO | bot_game_observer | Sessions (JSONL): C:\Users\user1\Downloads\MonitorBot-main (1)\MonitorBot-main\bot_game_observer\dist\logs\sessions
-2026-04-08 14:03:07,130 | INFO | bot_game_observer | Exports (CSV/MD): C:\Users\user1\Downloads\MonitorBot-main (1)\MonitorBot-main\bot_game_observer\dist\exports\reports
-2026-04-08 14:03:07,131 | INFO | bot_game_observer | Screenshots: C:\Users\user1\Downloads\MonitorBot-main (1)\MonitorBot-main\bot_game_observer\dist\screenshots
-2026-04-08 14:03:07,132 | INFO | bot_game_observer | App log file: C:\Users\user1\Downloads\MonitorBot-main (1)\MonitorBot-main\bot_game_observer\dist\logs\app.log
