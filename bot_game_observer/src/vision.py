@@ -105,14 +105,89 @@ def ocr_region_text(image_bgr: np.ndarray, region: Region, lang: str = "eng") ->
         return ""
 
 
-def parse_numeric_amount(text: str) -> tuple[float | None, float]:
+def parse_numeric_amount(text: str, hint: str | None = None) -> tuple[float | None, float]:
     cleaned = text.strip()
     if not cleaned:
         return None, 0.0
-    matches = re.findall(r"\d+(?:[.,]\d+)?", cleaned.replace(" ", ""))
-    if not matches:
+    compact = cleaned.replace(" ", "")
+    token_matches = list(re.finditer(r"\d[\d°'`.,-]*", compact))
+    if not token_matches:
         return None, 0.0
-    raw = matches[-1].replace(",", ".")
+
+    def _normalize_numeric_token(token: str) -> str | None:
+        normalized = token.replace("°", "").replace("'", "").replace("`", "")
+        normalized = re.sub(r"[^0-9.,-]", "", normalized)
+        if not re.search(r"\d", normalized):
+            return None
+        seps = [i for i, ch in enumerate(normalized) if ch in ".,-"]
+        if not seps:
+            return normalized
+        if len(seps) == 1:
+            sep_idx = seps[0]
+            sep_char = normalized[sep_idx]
+            whole = re.sub(r"[^0-9]", "", normalized[:sep_idx])
+            frac = re.sub(r"[^0-9]", "", normalized[sep_idx + 1 :])
+            if not whole:
+                return None
+            if sep_char in ",." and len(frac) == 3:
+                return f"{whole}{frac}"
+            if frac:
+                return f"{whole}.{frac}"
+            return whole
+        last_sep = seps[-1]
+        whole = re.sub(r"[^0-9]", "", normalized[:last_sep])
+        frac = re.sub(r"[^0-9]", "", normalized[last_sep + 1 :])
+        if not whole:
+            return None
+        if frac:
+            return f"{whole}.{frac}"
+        return whole
+
+    candidates: list[tuple[int, str, float]] = []
+    for m in token_matches:
+        raw_token = m.group(0)
+        normalized = _normalize_numeric_token(raw_token)
+        if not normalized:
+            continue
+        try:
+            candidate_value = float(normalized)
+        except ValueError:
+            continue
+        candidates.append((m.start(), normalized, candidate_value))
+    if not candidates:
+        return None, 0.0
+
+    selected = candidates[-1]
+    if hint:
+        hint_key = hint.strip().lower()
+        keywords_by_hint = {
+            "credit": ["CREDIT", "BALANCE"],
+            "balance": ["BALANCE", "CREDIT"],
+            "bet": ["BET"],
+            "win": ["WIN"],
+        }
+        keywords = keywords_by_hint.get(hint_key, [])
+        if keywords:
+            upper_text = compact.upper()
+            keyword_positions: list[tuple[int, int]] = []
+            for keyword in keywords:
+                for m in re.finditer(re.escape(keyword), upper_text):
+                    keyword_positions.append((m.start(), m.end()))
+            if keyword_positions:
+                ranked: list[tuple[int, int, int, float, int]] = []
+                for idx, (start, normalized, candidate_value) in enumerate(candidates):
+                    best_after = 0
+                    best_distance = len(upper_text) + 1
+                    for kw_start, kw_end in keyword_positions:
+                        distance = abs(start - kw_end)
+                        if distance < best_distance:
+                            best_distance = distance
+                        if start >= kw_end:
+                            best_after = 1
+                    digit_len = len(normalized.replace(".", ""))
+                    ranked.append((best_after, -best_distance, digit_len, candidate_value, idx))
+                selected = candidates[max(ranked)[4]]
+    raw = selected[1]
     try:
         value = float(raw)
     except ValueError:
