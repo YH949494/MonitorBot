@@ -89,6 +89,16 @@ class SpinResult(BaseModel):
     scatter_match_scores: list[float] | None = None
     bonus_match_scores: list[float] | None = None
     symbol_detection_reason_flags: list[str] | None = None
+    scatter_debug_template_present: bool | None = None
+    scatter_debug_template_shape: list[int] | None = None
+    scatter_debug_reels_shape: list[int] | None = None
+    scatter_debug_best_score: float | None = None
+    scatter_debug_best_loc: list[int] | None = None
+    scatter_debug_threshold: float | None = None
+    scatter_debug_frame_index: int | None = None
+    scatter_debug_ran: bool = False
+    scatter_debug_reason: str | None = None
+    scatter_debug_reels_path: str | None = None
 
     fallback_used: bool = False
     timeouts: SpinTimeouts = Field(default_factory=SpinTimeouts)

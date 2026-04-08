@@ -83,6 +83,9 @@ class DetectionConfig(BaseModel):
     symbol_match_center_merge_px: int = Field(default=24, ge=0)
     symbol_max_count_cap: int = Field(default=12, ge=1)
     symbol_capture_cooldown_sec: float = Field(default=2.0, ge=0.0)
+    symbol_debug_mode: bool = False
+    symbol_debug_max_spins: int = Field(default=10, ge=0)
+    symbol_debug_save_reels_crop: bool = True
     use_ocr_balance: bool = False
     ocr_lang: str = "eng"
 
