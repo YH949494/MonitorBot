@@ -120,6 +120,7 @@ class SessionRunner:
         self._locked_session_bet: float | None = None
         self._bet_lock_acquired_at_spin: int | None = None
         self._bet_lock_source: str | None = None
+        self._reset_session_bet_lock()
         self._last_payout_sample_mono: float | None = None
         self._last_bet_sample_mono: float | None = None
         self._error_count = 0
@@ -133,6 +134,11 @@ class SessionRunner:
         self._last_symbol_capture_by_reason: dict[str, float] = {}
         self._symbol_debug_saved_spins = 0
 
+    def _reset_session_bet_lock(self) -> None:
+        self._locked_session_bet = None
+        self._bet_lock_acquired_at_spin = None
+        self._bet_lock_source = None
+
     def _classify_post_result_visual(self, duration_sec: float, bonus_like_signal: bool) -> str:
         det = self.settings.detection
         if bonus_like_signal or duration_sec >= det.post_result_bonus_like_threshold_sec:
@@ -144,10 +150,6 @@ class SessionRunner:
         return "none"
 
     def _start_spin_attempt(self, click_ts: datetime | None) -> None:
-        if self._spin_counter == 0:
-            self._locked_session_bet = None
-            self._bet_lock_acquired_at_spin = None
-            self._bet_lock_source = None
         self._spin_counter += 1
         self._active_spin = SpinResult(
             spin_index=self._spin_counter,
@@ -404,10 +406,13 @@ class SessionRunner:
             return
         if probable_win_signal:
             self._active_spin.win_signal_detected = True
+        self._active_spin.payout = payout
+        self._apply_payout_truth_reconciliation(self._active_spin)
+        effective_payout = self._active_spin.payout_effective_value
         canonical_bet = self._locked_session_bet if self._locked_session_bet is not None else self._active_spin.bet
         payload = classify_spin_result(
             bet=canonical_bet,
-            payout=payout,
+            payout=effective_payout,
             visual_win=visual_win if visual_win is not None else self._active_spin.visual_win,
             detector_status=detector_status,
             reason=reason,
@@ -435,12 +440,12 @@ class SessionRunner:
         self._active_spin.bet_lock_source = self._bet_lock_source
         self._active_spin.canonical_bet = canonical_bet
         self._active_spin.empty_spin = self._active_spin.result_kind == "no_win"
-        if payout is None or canonical_bet is None:
+        if effective_payout is None or canonical_bet is None:
             self._active_spin.visual_win_by_bet = None
             self._active_spin.big_win = None
         else:
-            self._active_spin.visual_win_by_bet = payout < canonical_bet
-            self._active_spin.big_win = payout > canonical_bet
+            self._active_spin.visual_win_by_bet = effective_payout < canonical_bet
+            self._active_spin.big_win = effective_payout > canonical_bet
         self._active_spin.fallback_used = fallback_used
         if self._active_spin.ts_result_detected is None:
             self._active_spin.ts_result_detected = _utcnow()
@@ -463,6 +468,43 @@ class SessionRunner:
         self._spin_start_evidence_seen = False
         self._last_payout_sample_mono = None
         self._last_bet_sample_mono = None
+
+    def _apply_payout_truth_reconciliation(self, spin: SpinResult) -> None:
+        tolerance = 0.009
+        balance_delta: float | None = None
+        if spin.balance_before is not None and spin.balance_after is not None:
+            balance_delta = round(spin.balance_after - spin.balance_before, 2)
+        spin.payout_balance_delta_value = balance_delta
+        spin.payout_truth_conflict = False
+        if spin.payout is not None and balance_delta is not None:
+            if abs(spin.payout - balance_delta) <= tolerance:
+                spin.payout_truth_source = "ocr_balance_agree"
+                spin.payout_truth_value = spin.payout
+                spin.payout_effective_value = spin.payout
+                spin.payout_effective_source = "ocr_balance_agree"
+            else:
+                spin.payout_truth_source = "ocr_balance_conflict"
+                spin.payout_truth_conflict = True
+                spin.payout_truth_value = balance_delta
+                spin.payout_effective_value = balance_delta
+                spin.payout_effective_source = "ocr_balance_conflict"
+            return
+        if spin.payout is not None:
+            spin.payout_truth_source = "balance_delta_confirmed" if spin.payout_source == "balance_delta" else "ocr_confirmed"
+            spin.payout_truth_value = spin.payout
+            spin.payout_effective_value = spin.payout
+            spin.payout_effective_source = spin.payout_truth_source
+            return
+        if balance_delta is not None:
+            spin.payout_truth_source = "balance_delta_confirmed"
+            spin.payout_truth_value = balance_delta
+            spin.payout_effective_value = balance_delta
+            spin.payout_effective_source = "balance_delta_confirmed"
+            return
+        spin.payout_truth_source = "unresolved"
+        spin.payout_truth_value = None
+        spin.payout_effective_value = None
+        spin.payout_effective_source = "unresolved"
 
     def _normalize_spin_result_timestamps(self, spin: SpinResult) -> None:
         if spin.post_result_animation_duration_sec is not None:
@@ -1144,6 +1186,7 @@ class SessionRunner:
                 "Configuration not marked calibrated. Run `python calibrate.py` first."
             )
 
+        self._reset_session_bet_lock()
         self._setup_hotkeys()
         started = _utcnow()
         self._emit(

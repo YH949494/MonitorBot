@@ -10,6 +10,20 @@ from pydantic import BaseModel, Field
 DetectorStatus = Literal["confirmed", "partial", "fallback", "timeout", "ambiguous"]
 ResultClass = Literal["confirmed_no_win", "confirmed_win", "probable_win", "unreadable_result"]
 PostResultVisualClassification = Literal["none", "normal_result", "long_animation", "bonus_like"]
+PayoutTruthSource = Literal[
+    "ocr_confirmed",
+    "balance_delta_confirmed",
+    "ocr_balance_agree",
+    "ocr_balance_conflict",
+    "unresolved",
+]
+PayoutEffectiveSource = Literal[
+    "ocr_confirmed",
+    "balance_delta_confirmed",
+    "ocr_balance_agree",
+    "ocr_balance_conflict",
+    "unresolved",
+]
 
 
 class SpinTimeouts(BaseModel):
@@ -36,6 +50,13 @@ class SpinResult(BaseModel):
     balance_after: float | None = None
     payout_source: Literal["ocr", "balance_delta", "template", "unknown"] = "unknown"
     payout_resolution_status: Literal["confirmed", "estimated", "unresolved"] = "unresolved"
+    payout_truth_source: PayoutTruthSource = "unresolved"
+    payout_truth_conflict: bool = False
+    payout_truth_value: float | None = None
+    payout_balance_delta_value: float | None = None
+    # Effective payout used for downstream analytics/classification after OCR/balance reconciliation.
+    payout_effective_value: float | None = None
+    payout_effective_source: PayoutEffectiveSource = "unresolved"
     raw_bet_ocr_samples: list[str] = Field(default_factory=list)
     raw_payout_ocr_samples: list[str] = Field(default_factory=list)
     raw_balance_samples: list[str] = Field(default_factory=list)

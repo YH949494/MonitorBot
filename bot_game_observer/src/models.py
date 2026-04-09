@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+import logging
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+log = logging.getLogger(__name__)
 
 
 def utcnow() -> datetime:
@@ -69,6 +72,7 @@ class DetectionConfig(BaseModel):
     post_result_normal_threshold_sec: float = Field(default=1.0, ge=0.0)
     post_result_long_animation_threshold_sec: float = Field(default=3.0, ge=0.1)
     post_result_bonus_like_threshold_sec: float = Field(default=6.0, ge=0.1)
+    # Deprecated legacy payout OCR knobs kept for backward compatibility.
     payout_read_delay_sec: float = Field(default=0.25, ge=0.0)
     payout_read_retry_window_sec: float = Field(default=1.0, ge=0.0)
     payout_read_max_attempts: int = Field(default=5, ge=1)
@@ -100,6 +104,38 @@ class DetectionConfig(BaseModel):
     symbol_debug_save_reels_crop: bool = True
     use_ocr_balance: bool = False
     ocr_lang: str = "eng"
+
+    @model_validator(mode="after")
+    def _bridge_legacy_payout_settings(self) -> "DetectionConfig":
+        # New payout sampling/stabilization keys take precedence when explicitly set.
+        # Legacy keys map into new keys only when legacy was explicitly provided and new was not.
+        fields_set = self.model_fields_set
+        legacy_used = False
+        legacy_overridden = False
+        if "payout_read_delay_sec" in fields_set and "payout_sampling_initial_delay_ms" not in fields_set:
+            self.payout_sampling_initial_delay_ms = int(round(self.payout_read_delay_sec * 1000.0))
+            legacy_used = True
+        elif "payout_read_delay_sec" in fields_set and "payout_sampling_initial_delay_ms" in fields_set:
+            legacy_overridden = True
+        if "payout_read_retry_window_sec" in fields_set and "payout_sampling_window_ms" not in fields_set:
+            self.payout_sampling_window_ms = int(round(self.payout_read_retry_window_sec * 1000.0))
+            legacy_used = True
+        elif "payout_read_retry_window_sec" in fields_set and "payout_sampling_window_ms" in fields_set:
+            legacy_overridden = True
+        if "payout_read_max_attempts" in fields_set and "payout_stabilization_max_attempts" not in fields_set:
+            self.payout_stabilization_max_attempts = self.payout_read_max_attempts
+            legacy_used = True
+        elif "payout_read_max_attempts" in fields_set and "payout_stabilization_max_attempts" in fields_set:
+            legacy_overridden = True
+        if legacy_used:
+            log.warning(
+                "Legacy payout config keys applied to new payout sampling/stabilization settings."
+            )
+        if legacy_overridden:
+            log.warning(
+                "Both legacy and new payout config keys set; new payout settings took precedence."
+            )
+        return self
 
 
 class AutomationConfig(BaseModel):
@@ -226,6 +262,8 @@ class SessionSummary(BaseModel):
     total_spins: int = 0
     total_wins: int = 0
     total_no_win: int = 0
+    unreadable_win_count: int = 0
+    finalized_non_no_win_count: int = 0
     visual_win_count: int = 0
     any_payout_count: int = 0
     real_win_count: int = 0
@@ -240,6 +278,8 @@ class SessionSummary(BaseModel):
     any_payout_rate: float = 0.0
     real_win_rate: float = 0.0
     first_win_spin_index: int | None = None
+    first_readable_win_spin_index: int | None = None
+    first_finalized_non_no_win_spin_index: int | None = None
     spins_before_first_win: int | None = None
     gaps_between_wins: list[int] = Field(default_factory=list)
     avg_spins_between_wins: float | None = None
@@ -254,6 +294,25 @@ class SessionSummary(BaseModel):
     big_win_spin_indices: list[int] = Field(default_factory=list)
     missing_payout_count: int = 0
     missing_payout_rate: float = 0.0
+    payout_truth_conflict_count: int = 0
+    ocr_balance_agree_count: int = 0
+    balance_delta_confirmed_count: int = 0
+    payout_effective_resolved_count: int = 0
+    payout_effective_unresolved_count: int = 0
+    balance_backed_payout_count: int = 0
+    ocr_only_payout_count: int = 0
+    payout_conflict_count: int = 0
+    session_trust_score: float | None = None
+    session_trust_label: str | None = None
+    coverage_ratio: float | None = None
+    session_quality: str | None = None
+    usable_spin_count: int = 0
+    session_valid_for_analysis: bool = True
+    session_exclusion_reason: str | None = None
+    conflict_spin_indices: list[int] = Field(default_factory=list)
+    unresolved_spin_indices: list[int] = Field(default_factory=list)
+    consecutive_conflict_spins_max: int = 0
+    consecutive_unresolved_spins_max: int = 0
     locked_session_bet: float | None = None
     bonus_tease_count: int = 0
     bonus_trigger_count: int = 0

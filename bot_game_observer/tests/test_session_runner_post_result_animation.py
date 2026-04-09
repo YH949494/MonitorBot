@@ -518,15 +518,163 @@ def test_finalize_classification_prefers_locked_session_bet() -> None:
     assert payload["big_win"] is False
 
 
-def test_new_session_start_resets_bet_lock() -> None:
+def test_payout_truth_marks_ocr_balance_agreement() -> None:
+    runner, events = _make_runner()
+    runner._active_spin = SpinResult(
+        spin_index=15,
+        visual_win=True,
+        result_kind="win",
+        payout=2.0,
+        payout_source="ocr",
+        balance_before=100.0,
+        balance_after=102.0,
+    )
+    runner._finalize_spin_result(
+        detector_status="confirmed",
+        reason="payout_read_success",
+        payout=2.0,
+        visual_win=True,
+        fallback_used=False,
+    )
+    _et, payload = events[-1]
+    assert payload["payout_truth_source"] == "ocr_balance_agree"
+    assert payload["payout_truth_conflict"] is False
+    assert payload["payout_truth_value"] == 2.0
+    assert payload["payout_effective_value"] == 2.0
+    assert payload["payout_effective_source"] == "ocr_balance_agree"
+
+
+def test_payout_truth_uses_balance_delta_when_ocr_missing() -> None:
+    runner, events = _make_runner()
+    runner._active_spin = SpinResult(
+        spin_index=16,
+        visual_win=False,
+        result_kind="no_win",
+        payout=None,
+        payout_source="unknown",
+        balance_before=100.0,
+        balance_after=101.5,
+    )
+    runner._finalize_spin_result(
+        detector_status="fallback",
+        reason="payout_not_readable",
+        payout=None,
+        visual_win=False,
+        fallback_used=True,
+    )
+    _et, payload = events[-1]
+    assert payload["payout_truth_source"] == "balance_delta_confirmed"
+    assert payload["payout_truth_value"] == 1.5
+    assert payload["payout_balance_delta_value"] == 1.5
+    assert payload["payout_effective_value"] == 1.5
+    assert payload["payout_effective_source"] == "balance_delta_confirmed"
+
+
+def test_payout_truth_marks_conflict_without_overwriting_payout() -> None:
+    runner, events = _make_runner()
+    runner._active_spin = SpinResult(
+        spin_index=17,
+        visual_win=True,
+        result_kind="win",
+        payout=2.0,
+        payout_source="ocr",
+        balance_before=100.0,
+        balance_after=101.0,
+    )
+    runner._finalize_spin_result(
+        detector_status="confirmed",
+        reason="payout_read_success",
+        payout=2.0,
+        visual_win=True,
+        fallback_used=False,
+    )
+    _et, payload = events[-1]
+    assert payload["payout_truth_source"] == "ocr_balance_conflict"
+    assert payload["payout_truth_conflict"] is True
+    assert payload["payout_truth_value"] == 1.0
+    assert payload["payout_effective_value"] == 1.0
+    assert payload["payout_effective_source"] == "ocr_balance_conflict"
+    assert payload["payout"] == 2.0
+
+
+def test_payout_truth_unresolved_when_no_ocr_or_balance_delta() -> None:
+    runner, events = _make_runner()
+    runner._active_spin = SpinResult(spin_index=18, visual_win=False, result_kind="no_win")
+    runner._finalize_spin_result(
+        detector_status="fallback",
+        reason="payout_not_readable",
+        payout=None,
+        visual_win=False,
+        fallback_used=True,
+    )
+    _et, payload = events[-1]
+    assert payload["payout_truth_source"] == "unresolved"
+    assert payload["payout_truth_conflict"] is False
+    assert payload["payout_truth_value"] is None
+    assert payload["payout_effective_value"] is None
+
+
+def test_payout_truth_ocr_only_sets_effective_to_ocr_value() -> None:
+    runner, events = _make_runner()
+    runner._active_spin = SpinResult(spin_index=19, visual_win=True, result_kind="win", payout=3.0, payout_source="ocr")
+    runner._finalize_spin_result(
+        detector_status="confirmed",
+        reason="payout_read_success",
+        payout=3.0,
+        visual_win=True,
+        fallback_used=False,
+    )
+    _et, payload = events[-1]
+    assert payload["payout_effective_value"] == 3.0
+    assert payload["payout_effective_source"] == "ocr_confirmed"
+
+
+def test_classification_uses_effective_payout_when_conflict_exists() -> None:
+    runner, events = _make_runner()
+    runner._locked_session_bet = 1.5
+    runner._active_spin = SpinResult(
+        spin_index=20,
+        visual_win=True,
+        result_kind="win",
+        payout=2.0,
+        payout_source="ocr",
+        balance_before=100.0,
+        balance_after=101.0,
+    )
+    runner._finalize_spin_result(
+        detector_status="confirmed",
+        reason="payout_read_success",
+        payout=2.0,
+        visual_win=True,
+        fallback_used=False,
+    )
+    _et, payload = events[-1]
+    assert payload["payout"] == 2.0
+    assert payload["payout_effective_value"] == 1.0
+    assert payload["visual_win_by_bet"] is True
+    assert payload["big_win"] is False
+
+
+def test_explicit_session_reset_clears_bet_lock() -> None:
+    runner, _events = _make_runner()
+    runner._locked_session_bet = 2.0
+    runner._bet_lock_acquired_at_spin = 1
+    runner._bet_lock_source = "consecutive"
+    runner._reset_session_bet_lock()
+    assert runner._locked_session_bet is None
+    assert runner._bet_lock_acquired_at_spin is None
+    assert runner._bet_lock_source is None
+
+
+def test_start_spin_attempt_does_not_reset_existing_bet_lock() -> None:
     runner, _events = _make_runner()
     runner._spin_counter = 0
     runner._locked_session_bet = 2.0
     runner._bet_lock_acquired_at_spin = 1
     runner._bet_lock_source = "consecutive"
     runner._start_spin_attempt(click_ts=None)
-    assert runner._locked_session_bet is None
-    assert runner._bet_lock_acquired_at_spin is None
+    assert runner._locked_session_bet == 2.0
+    assert runner._bet_lock_acquired_at_spin == 1
 
 
 def test_long_animation_without_win_cues_is_not_probable_win(monkeypatch) -> None:
