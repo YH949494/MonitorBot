@@ -177,8 +177,6 @@ def build_summary(session_id: str, events: list[dict[str, Any]]) -> SessionSumma
     coverage_ratio: float | None = None
     if expected_spin_count > 0:
         coverage_ratio = max(0.0, min(1.0, total_spins / expected_spin_count))
-    if coverage_ratio is not None and 0.80 <= coverage_ratio < 0.95:
-        warnings.append("Session coverage degraded — use with caution")
     readable_win_spins = [spin_idx for spin_idx, kind in finalized_outcomes if kind == "win"]
     first_finalized_non_no_win = next(
         (spin_idx for spin_idx, kind in finalized_outcomes if kind != "no_win"),
@@ -217,6 +215,9 @@ def build_summary(session_id: str, events: list[dict[str, Any]]) -> SessionSumma
         warnings.append("No wins detected; verify win_banner template and region.")
 
     primary_spins = total_spins
+    usable_spin_ratio: float | None = None
+    if total_spins > 0:
+        usable_spin_ratio = max(0.0, min(1.0, usable_spin_count / total_spins))
     any_payout_rate = (any_payout_count / primary_spins) if primary_spins else 0.0
     real_win_rate = (real_win_count / primary_spins) if primary_spins else 0.0
     empty_spin_rate = (empty_spin_count / primary_spins) if primary_spins else 0.0
@@ -250,38 +251,47 @@ def build_summary(session_id: str, events: list[dict[str, Any]]) -> SessionSumma
         consecutive_unresolved_spins_max >= 5
         or consecutive_conflict_spins_max >= 4
     )
+    # Stage 1 — hard invalidators.
     if coverage_ratio is None:
         session_quality = "invalid"
         session_valid_for_analysis = False
         session_exclusion_reason = "missing_expected_spin_count"
-    elif coverage_ratio < 0.80:
-        session_quality = "invalid"
-        session_valid_for_analysis = False
-        session_exclusion_reason = "low_coverage_ratio"
-    elif coverage_ratio < 0.95:
-        session_quality = "degraded"
-        session_valid_for_analysis = True
-        session_exclusion_reason = "degraded_coverage"
-    else:
-        session_quality = "valid"
-        session_valid_for_analysis = True
-        session_exclusion_reason = None
-    if anomaly_threshold_exceeded:
+        warnings.append("Expected spin count missing — session excluded from primary analysis")
+    elif anomaly_threshold_exceeded:
         session_quality = "invalid"
         session_valid_for_analysis = False
         session_exclusion_reason = "anomaly_threshold_exceeded"
+        warnings.append("Anomaly threshold exceeded — exclude from primary analysis")
+    # Stage 2 — trust hard invalidation.
     elif session_trust_score is not None and session_trust_score < 0.40:
         session_quality = "invalid"
         session_valid_for_analysis = False
         session_exclusion_reason = "low_trust_score"
         warnings.append("Low trust session — exclude from primary analysis")
-    elif (
-        session_quality == "valid"
-        and session_trust_score is not None
-        and session_trust_score < 0.55
-    ):
-        session_quality = "degraded"
-        session_exclusion_reason = "degraded_coverage"
+    else:
+        # Stage 3 — coverage classification.
+        if coverage_ratio < 0.80:
+            session_quality = "invalid"
+            session_valid_for_analysis = False
+            session_exclusion_reason = "low_coverage_ratio"
+        elif coverage_ratio < 0.95:
+            session_quality = "degraded"
+            session_valid_for_analysis = True
+            session_exclusion_reason = "degraded_coverage"
+            warnings.append("Session coverage degraded — use with caution")
+        else:
+            session_quality = "valid"
+            session_valid_for_analysis = True
+            session_exclusion_reason = None
+        # Stage 4 — trust-based degradation (only from valid).
+        if (
+            session_quality == "valid"
+            and session_trust_score is not None
+            and session_trust_score < 0.55
+        ):
+            session_quality = "degraded"
+            session_exclusion_reason = "degraded_trust"
+            warnings.append("Session trust degraded — use with caution")
 
     return SessionSummary(
         session_id=session_id,
@@ -336,6 +346,7 @@ def build_summary(session_id: str, events: list[dict[str, Any]]) -> SessionSumma
         coverage_ratio=coverage_ratio,
         session_quality=session_quality,
         usable_spin_count=usable_spin_count,
+        usable_spin_ratio=usable_spin_ratio,
         session_valid_for_analysis=session_valid_for_analysis,
         session_exclusion_reason=session_exclusion_reason,
         conflict_spin_indices=conflict_spin_indices,

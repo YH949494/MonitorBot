@@ -307,6 +307,7 @@ class SessionSummary(BaseModel):
     coverage_ratio: float | None = None
     session_quality: str | None = None
     usable_spin_count: int = 0
+    usable_spin_ratio: float | None = None
     session_valid_for_analysis: bool = True
     session_exclusion_reason: str | None = None
     conflict_spin_indices: list[int] = Field(default_factory=list)

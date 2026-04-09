@@ -382,6 +382,7 @@ def test_session_metrics_and_trust_use_effective_payout_truth() -> None:
     assert s.coverage_ratio == 1.0
     assert s.session_quality == "valid"
     assert s.usable_spin_count == 2
+    assert s.usable_spin_ratio == (2 / 3)
     assert s.conflict_spin_indices == [1]
     assert s.unresolved_spin_indices == [2]
     assert s.consecutive_conflict_spins_max == 1
@@ -460,6 +461,7 @@ def test_session_trust_label_high_with_agreement_and_resolution() -> None:
     assert s.coverage_ratio == 1.0
     assert s.session_quality == "valid"
     assert s.usable_spin_count == 2
+    assert s.usable_spin_ratio == 1.0
 
 
 def test_any_payout_count_uses_effective_payout_not_legacy_flag() -> None:
@@ -565,6 +567,7 @@ def test_missing_expected_spin_count_marks_session_invalid() -> None:
     assert s.session_quality == "invalid"
     assert s.session_valid_for_analysis is False
     assert s.session_exclusion_reason == "missing_expected_spin_count"
+    assert any("Expected spin count missing — session excluded from primary analysis" in w for w in s.warnings)
 
 
 def test_anomaly_threshold_exceeded_invalidates_session() -> None:
@@ -583,3 +586,142 @@ def test_anomaly_threshold_exceeded_invalidates_session() -> None:
     assert s.session_quality == "invalid"
     assert s.session_valid_for_analysis is False
     assert s.session_exclusion_reason == "anomaly_threshold_exceeded"
+    assert any("Anomaly threshold exceeded — exclude from primary analysis" in w for w in s.warnings)
+
+
+def test_anomaly_threshold_invalidates_even_with_high_coverage() -> None:
+    events: list[dict[str, object]] = []
+    for spin_index in range(1, 6):
+        events.append({"ts": f"2026-04-06T14:00:{spin_index:02d}+00:00", "event_type": "spin_started", "payload": {}})
+        events.append(
+            {
+                "ts": f"2026-04-06T14:01:{spin_index:02d}+00:00",
+                "event_type": "spin_result_summary",
+                "payload": {
+                    "spin_index": spin_index,
+                    "result_kind": "win",
+                    "payout_effective_value": None,
+                    "payout_truth_conflict": True,
+                },
+            }
+        )
+    s = build_summary("anom_high_cov", events)
+    assert s.coverage_ratio == 1.0
+    assert s.session_quality == "invalid"
+    assert s.session_exclusion_reason == "anomaly_threshold_exceeded"
+
+
+def test_low_trust_invalidates_even_with_high_coverage() -> None:
+    events = [
+        {"ts": "2026-04-06T15:00:00+00:00", "event_type": "spin_started", "payload": {}},
+        {
+            "ts": "2026-04-06T15:00:01+00:00",
+            "event_type": "spin_result_summary",
+            "payload": {"spin_index": 1, "result_kind": "win", "payout_effective_value": None, "payout_truth_conflict": True},
+        },
+        {"ts": "2026-04-06T15:00:02+00:00", "event_type": "spin_started", "payload": {}},
+        {
+            "ts": "2026-04-06T15:00:03+00:00",
+            "event_type": "spin_result_summary",
+            "payload": {"spin_index": 2, "result_kind": "win", "payout_effective_value": None, "payout_truth_conflict": False},
+        },
+    ]
+    s = build_summary("low_trust_high_cov", events)
+    assert s.coverage_ratio == 1.0
+    assert s.session_trust_score is not None and s.session_trust_score < 0.40
+    assert s.session_quality == "invalid"
+    assert s.session_exclusion_reason == "low_trust_score"
+
+
+def test_valid_coverage_with_medium_trust_degrades_for_trust_reason() -> None:
+    events = [
+        {"ts": "2026-04-06T16:00:00+00:00", "event_type": "spin_started", "payload": {}},
+        {
+            "ts": "2026-04-06T16:00:01+00:00",
+            "event_type": "spin_result_summary",
+            "payload": {
+                "spin_index": 1,
+                "result_kind": "win",
+                "payout_effective_value": 1.0,
+                "payout_truth_conflict": True,
+            },
+        },
+        {"ts": "2026-04-06T16:00:02+00:00", "event_type": "spin_started", "payload": {}},
+        {
+            "ts": "2026-04-06T16:00:03+00:00",
+            "event_type": "spin_result_summary",
+            "payload": {
+                "spin_index": 2,
+                "result_kind": "no_win",
+                "payout_effective_value": None,
+                "payout_truth_conflict": True,
+            },
+        },
+        {"ts": "2026-04-06T16:00:04+00:00", "event_type": "spin_started", "payload": {}},
+        {
+            "ts": "2026-04-06T16:00:05+00:00",
+            "event_type": "spin_result_summary",
+            "payload": {
+                "spin_index": 3,
+                "result_kind": "no_win",
+                "payout_effective_value": 0.0,
+                "payout_truth_conflict": False,
+            },
+        },
+    ]
+    s = build_summary("degraded_trust", events)
+    assert s.coverage_ratio == 1.0
+    assert s.session_trust_score is not None and 0.40 <= s.session_trust_score < 0.55
+    assert s.session_quality == "degraded"
+    assert s.session_exclusion_reason == "degraded_trust"
+    assert s.session_exclusion_reason != "degraded_coverage"
+    assert any("Session trust degraded — use with caution" in w for w in s.warnings)
+
+
+def test_medium_coverage_with_acceptable_trust_degrades_for_coverage_reason() -> None:
+    events: list[dict[str, object]] = []
+    for spin_index in range(1, 11):
+        events.append({"ts": f"2026-04-06T17:00:{spin_index:02d}+00:00", "event_type": "spin_started", "payload": {}})
+        if spin_index <= 9:
+            payload: dict[str, object] = {"spin_index": spin_index, "result_kind": "no_win", "payout_effective_value": 0.0}
+            if spin_index == 1:
+                payload["payout_truth_source"] = "ocr_balance_agree"
+            events.append(
+                {
+                    "ts": f"2026-04-06T17:01:{spin_index:02d}+00:00",
+                    "event_type": "spin_result_summary",
+                    "payload": payload,
+                }
+            )
+    s = build_summary("degraded_cov", events)
+    assert s.coverage_ratio == 0.9
+    assert s.session_trust_score is not None and s.session_trust_score >= 0.55
+    assert s.session_quality == "degraded"
+    assert s.session_exclusion_reason == "degraded_coverage"
+    assert any("Session coverage degraded — use with caution" in w for w in s.warnings)
+
+
+def test_usable_spin_ratio_none_when_no_spins() -> None:
+    s = build_summary("no_spins", [])
+    assert s.total_spins == 0
+    assert s.usable_spin_ratio is None
+
+
+def test_usable_spin_semantics_require_finalized_no_win_or_effective_payout() -> None:
+    events = [
+        {"ts": "2026-04-06T18:00:00+00:00", "event_type": "spin_started", "payload": {}},
+        {
+            "ts": "2026-04-06T18:00:01+00:00",
+            "event_type": "spin_result_summary",
+            "payload": {"spin_index": 1, "result_kind": "no_win", "payout_effective_value": None},
+        },
+        {"ts": "2026-04-06T18:00:02+00:00", "event_type": "spin_started", "payload": {}},
+        {
+            "ts": "2026-04-06T18:00:03+00:00",
+            "event_type": "spin_result_summary",
+            "payload": {"spin_index": 2, "result_kind": "win", "payout_effective_value": None},
+        },
+    ]
+    s = build_summary("usable_semantics", events)
+    assert s.usable_spin_count == 1
+    assert s.usable_spin_ratio == 0.5
