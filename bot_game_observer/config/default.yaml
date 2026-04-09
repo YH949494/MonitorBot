@@ -102,6 +102,18 @@ detection:
   payout_read_delay_sec: 0.0
   payout_read_retry_window_sec: 2.5
   payout_read_max_attempts: 10
+  payout_sampling_initial_delay_ms: 250
+  payout_sampling_retry_interval_ms: 150
+  payout_sampling_window_ms: 2500
+  payout_stabilization_min_confirmations: 2
+  payout_stabilization_min_attempts: 2
+  payout_stabilization_max_attempts: 10
+  bet_sampling_retry_interval_ms: 120
+  bet_sampling_window_ms: 2500
+  bet_stabilization_min_confirmations: 2
+  bet_stabilization_min_attempts: 2
+  bet_sampling_max_attempts: 8
+  bet_lock_max_spins_from_session_start: 5
   payout_evidence_mode: false
   payout_evidence_dir: logs/payout_evidence
   scatter_trigger_count: 4

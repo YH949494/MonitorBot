@@ -44,6 +44,21 @@ class SpinResult(BaseModel):
     payout_resolution_attempts: int = 0
     payout_read_attempts: int = 0
     payout_read_success: bool = False
+    payout_raw_attempts: list[dict[str, object]] = Field(default_factory=list)
+    payout_stabilized_value_source: str | None = None
+    bet_read_attempts: int = 0
+    bet_read_success: bool = False
+    bet_raw_attempts: list[dict[str, object]] = Field(default_factory=list)
+    stabilization_fail_reason: str | None = None
+    locked_session_bet: float | None = None
+    bet_lock_acquired_at_spin: int | None = None
+    bet_lock_source: str | None = None
+    current_spin_raw_bet: float | None = None
+    bet_mismatch_vs_lock: bool = False
+    canonical_bet: float | None = None
+    empty_spin: bool | None = None
+    visual_win_by_bet: bool | None = None
+    big_win: bool | None = None
     win_signal_detected: bool = False
 
     # visual_win: observed visual signal that resembles a win presentation on screen

@@ -14,7 +14,17 @@ if "pyautogui" not in sys.modules:
         click=lambda *_args, **_kwargs: None,
     )
 if "cv2" not in sys.modules:
-    sys.modules["cv2"] = types.SimpleNamespace(imwrite=lambda *_args, **_kwargs: True, __version__="4.0.0")
+    sys.modules["cv2"] = types.SimpleNamespace(
+        imwrite=lambda *_args, **_kwargs: True,
+        absdiff=lambda a, b: np.abs(a.astype(np.int16) - b.astype(np.int16)).astype(np.uint8),
+        TM_CCOEFF_NORMED=5,
+        matchTemplate=lambda scene, tmpl, _method: np.zeros(
+            (max(1, scene.shape[0] - tmpl.shape[0] + 1), max(1, scene.shape[1] - tmpl.shape[1] + 1)),
+            dtype=np.float32,
+        ),
+        minMaxLoc=lambda res: (float(np.min(res)), float(np.max(res)), (0, 0), (0, 0)),
+        __version__="4.0.0",
+    )
 
 from src.models import BotState, FramePacket, SessionEventType
 from src.session_runner import SessionRunner
@@ -54,6 +64,18 @@ def _make_runner() -> tuple[SessionRunner, list[tuple[SessionEventType, dict]]]:
             payout_read_delay_sec=0.25,
             payout_read_retry_window_sec=1.0,
             payout_read_max_attempts=5,
+            payout_sampling_initial_delay_ms=250,
+            payout_sampling_retry_interval_ms=0,
+            payout_sampling_window_ms=1000,
+            payout_stabilization_min_confirmations=2,
+            payout_stabilization_min_attempts=2,
+            payout_stabilization_max_attempts=5,
+            bet_sampling_retry_interval_ms=0,
+            bet_sampling_window_ms=1000,
+            bet_stabilization_min_confirmations=2,
+            bet_stabilization_min_attempts=2,
+            bet_sampling_max_attempts=5,
+            bet_lock_max_spins_from_session_start=3,
             ocr_lang="eng",
             use_ocr_balance=False,
         ),
@@ -67,6 +89,7 @@ def _make_runner() -> tuple[SessionRunner, list[tuple[SessionEventType, dict]]]:
     runner._post_result_animation_since = 102.0
     runner._payout_samples = deque(maxlen=3)
     runner._balance_samples = deque(maxlen=3)
+    runner._bet_samples = deque(maxlen=6)
     runner._result_evidence_saved = False
     runner._finalize_on_ready = False
     runner._result_ready_debug_frames = deque([{"motion_score": 18.1}, {"motion_score": 20.2}], maxlen=10)
@@ -76,6 +99,11 @@ def _make_runner() -> tuple[SessionRunner, list[tuple[SessionEventType, dict]]]:
     runner._post_result_animation_reason = None
     runner._result_detected_mono = 100.0
     runner._spin_counter = 1
+    runner._locked_session_bet = None
+    runner._bet_lock_acquired_at_spin = None
+    runner._bet_lock_source = None
+    runner._last_payout_sample_mono = None
+    runner._last_bet_sample_mono = None
     runner._save_evidence_crop = lambda *_args, **_kwargs: None
     events: list[tuple[SessionEventType, dict]] = []
     runner._emit = lambda event_type, payload: events.append((event_type, payload))
@@ -418,11 +446,87 @@ def test_balance_delta_fallback_uses_staged_before_after_samples(monkeypatch) ->
     monkeypatch.setattr("src.session_runner.vision.parse_numeric_amount", lambda *_args, **_kwargs: next(seq))
     runner._update_payout_resolution(frame, sig)
     runner._update_payout_resolution(frame, sig)
+
+
+def test_conflicting_payout_candidates_do_not_stabilize(monkeypatch) -> None:
+    runner, _events = _make_runner()
+    runner._active_spin = SpinResult(spin_index=14, visual_win=True, result_kind="win", bet=2.0)
+    runner._awaiting_ready_since = 100.0
+    runner._result_detected_mono = 100.0
+    runner.settings.regions = SimpleNamespace(
+        spin_button=None,
+        bet_text=None,
+        payout_text=SimpleNamespace(left=0, top=0, width=1, height=1),
+        balance_text=None,
+    )
+    frame = FramePacket(ts=datetime.now(timezone.utc), frame_index=2, image_bgr=np.zeros((4, 4, 3), dtype=np.uint8))
+    sig = _make_sig(motion=0.0, spin_button_ready=False)
+    seq = iter([(1.0, 0.9), (2.0, 0.9), (3.0, 0.9), (4.0, 0.9)])
+    monkeypatch.setattr("src.session_runner.vision.crop_region", lambda *_args, **_kwargs: np.ones((1, 1, 3), dtype=np.uint8))
+    monkeypatch.setattr("src.session_runner.vision.ocr_region_text", lambda *_args, **_kwargs: "1")
+    monkeypatch.setattr("src.session_runner.vision.parse_numeric_amount", lambda *_args, **_kwargs: next(seq))
+    monkeypatch.setattr("src.session_runner.time.monotonic", lambda: 100.6)
+    for _ in range(4):
+        runner._update_payout_resolution(frame, sig)
     assert runner._active_spin is not None
-    assert runner._active_spin.balance_before == 100.0
-    assert runner._active_spin.balance_after == 101.0
-    assert runner._active_spin.payout_source == "balance_delta"
-    assert runner._active_spin.payout == 1.0
+    assert runner._active_spin.payout is None
+
+
+def test_session_bet_lock_not_overwritten_by_later_noise(monkeypatch) -> None:
+    runner, _events = _make_runner()
+    runner._active_spin = SpinResult(spin_index=1, visual_win=True, result_kind="win")
+    runner._awaiting_ready_since = 100.0
+    runner._result_detected_mono = 100.0
+    runner.settings.regions = SimpleNamespace(
+        spin_button=None,
+        bet_text=SimpleNamespace(left=0, top=0, width=1, height=1),
+        payout_text=None,
+        balance_text=None,
+    )
+    frame = FramePacket(ts=datetime.now(timezone.utc), frame_index=2, image_bgr=np.zeros((4, 4, 3), dtype=np.uint8))
+    sig = _make_sig(motion=0.0, spin_button_ready=False)
+    seq = iter([(2.0, 0.9), (2.0, 0.9), (9.0, 0.9), (9.0, 0.9)])
+    monkeypatch.setattr("src.session_runner.vision.crop_region", lambda *_args, **_kwargs: np.ones((1, 1, 3), dtype=np.uint8))
+    monkeypatch.setattr("src.session_runner.vision.ocr_region_text", lambda *_args, **_kwargs: "2")
+    monkeypatch.setattr("src.session_runner.vision.parse_numeric_amount", lambda *_args, **_kwargs: next(seq))
+    monkeypatch.setattr("src.session_runner.time.monotonic", lambda: 100.6)
+    runner._update_payout_resolution(frame, sig)
+    runner._update_payout_resolution(frame, sig)
+    assert runner._locked_session_bet == 2.0
+    runner._active_spin.spin_index = 2
+    runner._update_payout_resolution(frame, sig)
+    runner._update_payout_resolution(frame, sig)
+    assert runner._locked_session_bet == 2.0
+
+
+def test_finalize_classification_prefers_locked_session_bet() -> None:
+    runner, events = _make_runner()
+    runner._locked_session_bet = 2.0
+    runner._bet_lock_acquired_at_spin = 1
+    runner._bet_lock_source = "consecutive"
+    runner._active_spin = SpinResult(spin_index=3, visual_win=False, result_kind="win", bet=9.0)
+    runner._finalize_spin_result(
+        detector_status="confirmed",
+        reason="payout_read_success",
+        payout=1.0,
+        visual_win=False,
+        fallback_used=False,
+    )
+    _et, payload = events[-1]
+    assert payload["canonical_bet"] == 2.0
+    assert payload["visual_win_by_bet"] is True
+    assert payload["big_win"] is False
+
+
+def test_new_session_start_resets_bet_lock() -> None:
+    runner, _events = _make_runner()
+    runner._spin_counter = 0
+    runner._locked_session_bet = 2.0
+    runner._bet_lock_acquired_at_spin = 1
+    runner._bet_lock_source = "consecutive"
+    runner._start_spin_attempt(click_ts=None)
+    assert runner._locked_session_bet is None
+    assert runner._bet_lock_acquired_at_spin is None
 
 
 def test_long_animation_without_win_cues_is_not_probable_win(monkeypatch) -> None:
