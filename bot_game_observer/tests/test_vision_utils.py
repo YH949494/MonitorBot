@@ -36,3 +36,49 @@ def test_motion_score_nonzero_on_shift() -> None:
     b = np.zeros((32, 32), dtype=np.uint8)
     b[10, 10] = 255
     assert vision.motion_score(a, b) > 0.0
+
+
+def test_parse_numeric_amount_prefers_win_over_balance() -> None:
+    value, _conf = vision.parse_numeric_amount("BALANCE 10000 WIN 2.00", hint="win")
+    assert value == 2.0
+
+
+def test_parse_numeric_amount_prefers_bet_over_others() -> None:
+    value, _conf = vision.parse_numeric_amount("BALANCE 1234 BET 15 WIN 3", hint="bet")
+    assert value == 15.0
+
+
+def test_parse_numeric_amount_credit_with_ocr_noise() -> None:
+    value, _conf = vision.parse_numeric_amount("CREDIT 99°984.00 BET 2.00", hint="credit")
+    assert value == 99984.0
+
+
+def test_parse_numeric_amount_without_hint_preserves_original_behavior() -> None:
+    value, _conf = vision.parse_numeric_amount("BALANCE 1234 WIN 12")
+    assert value == 12.0
+
+
+def test_parse_numeric_amount_without_numeric_returns_none() -> None:
+    value, conf = vision.parse_numeric_amount("BALANCE WIN")
+    assert value is None
+    assert conf == 0.0
+
+
+def test_parse_numeric_amount_normalizes_ocr_separators() -> None:
+    value, _conf = vision.parse_numeric_amount("CREDIT 99'984-00")
+    assert value == 99984.0
+
+
+def test_parse_numeric_amount_normalizes_comma_thousands() -> None:
+    value, _conf = vision.parse_numeric_amount("CREDIT 1,250")
+    assert value == 1250.0
+
+
+def test_parse_numeric_amount_normalizes_large_comma_thousands() -> None:
+    value, _conf = vision.parse_numeric_amount("CREDIT 99,984")
+    assert value == 99984.0
+
+
+def test_parse_numeric_amount_normalizes_dot_thousands() -> None:
+    value, _conf = vision.parse_numeric_amount("CREDIT 1.250")
+    assert value == 1250.0
