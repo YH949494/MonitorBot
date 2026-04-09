@@ -36,3 +36,9 @@ def test_motion_score_nonzero_on_shift() -> None:
     b = np.zeros((32, 32), dtype=np.uint8)
     b[10, 10] = 255
     assert vision.motion_score(a, b) > 0.0
+
+
+def test_parse_numeric_amount_handles_noisy_separators() -> None:
+    value, conf = vision.parse_numeric_amount("WIN 1'234.50")
+    assert value == 1234.5
+    assert conf > 0

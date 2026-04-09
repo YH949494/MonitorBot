@@ -95,3 +95,51 @@ def test_spin_result_summary_counts_and_timeouts() -> None:
     assert s.click_to_spinning_timeout_count == 1
     assert s.spinning_to_result_timeout_count == 1
     assert s.result_to_ready_timeout_count == 1
+
+
+def test_session_summary_tracks_empty_visual_big_and_missing_payout() -> None:
+    events = [
+        {"ts": "2026-04-06T10:00:00+00:00", "event_type": "spin_started", "payload": {}},
+        {
+            "ts": "2026-04-06T10:00:01+00:00",
+            "event_type": "spin_result_summary",
+            "payload": {
+                "spin_index": 1,
+                "result_kind": "no_win",
+                "payout": 0.0,
+                "visual_win_by_bet": False,
+                "big_win": False,
+                "locked_session_bet": 2.0,
+            },
+        },
+        {"ts": "2026-04-06T10:00:02+00:00", "event_type": "spin_started", "payload": {}},
+        {
+            "ts": "2026-04-06T10:00:03+00:00",
+            "event_type": "spin_result_summary",
+            "payload": {
+                "spin_index": 2,
+                "result_kind": "win",
+                "payout": 1.0,
+                "visual_win_by_bet": True,
+                "big_win": False,
+            },
+        },
+        {"ts": "2026-04-06T10:00:04+00:00", "event_type": "spin_started", "payload": {}},
+        {
+            "ts": "2026-04-06T10:00:05+00:00",
+            "event_type": "spin_result_summary",
+            "payload": {
+                "spin_index": 3,
+                "result_kind": "win",
+                "payout": None,
+                "visual_win_by_bet": None,
+                "big_win": None,
+            },
+        },
+    ]
+    s = build_summary("m", events)
+    assert s.empty_spin_count == 1
+    assert s.visual_win_count == 1
+    assert s.big_win_count == 0
+    assert s.missing_payout_count == 1
+    assert s.locked_session_bet == 2.0

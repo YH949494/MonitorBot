@@ -37,6 +37,13 @@ def build_summary(session_id: str, events: list[dict[str, Any]]) -> SessionSumma
     near_miss = 0
     bonus_tease = 0
     bonus_trig = 0
+    empty_spin_count = 0
+    visual_win_by_bet_count = 0
+    visual_win_spin_indices: list[int] = []
+    big_win_count = 0
+    big_win_spin_indices: list[int] = []
+    missing_payout_count = 0
+    locked_session_bet: float | None = None
     end_reason = "unknown"
     current_spin = 0
     conf_notes: list[str] = []
@@ -65,8 +72,27 @@ def build_summary(session_id: str, events: list[dict[str, Any]]) -> SessionSumma
 
         if et == SessionEventType.SPIN_RESULT_SUMMARY.value or et == "spin_result_summary":
             spin_summaries += 1
+            spin_index = payload.get("spin_index")
             if payload.get("visual_win") is True:
                 visual_win_count += 1
+            if payload.get("visual_win_by_bet") is True:
+                visual_win_by_bet_count += 1
+                if isinstance(spin_index, int):
+                    visual_win_spin_indices.append(spin_index)
+            elif "visual_win_by_bet" not in payload and payload.get("visual_win") is True:
+                visual_win_by_bet_count += 1
+                if isinstance(spin_index, int):
+                    visual_win_spin_indices.append(spin_index)
+            if payload.get("big_win") is True:
+                big_win_count += 1
+                if isinstance(spin_index, int):
+                    big_win_spin_indices.append(spin_index)
+            if payload.get("result_kind") == "no_win":
+                empty_spin_count += 1
+            if payload.get("payout") is None:
+                missing_payout_count += 1
+            if locked_session_bet is None and isinstance(payload.get("locked_session_bet"), (int, float)):
+                locked_session_bet = float(payload["locked_session_bet"])
             if payload.get("any_payout") is True:
                 any_payout_count += 1
             rc = payload.get("result_class")
@@ -108,6 +134,17 @@ def build_summary(session_id: str, events: list[dict[str, Any]]) -> SessionSumma
                 )
 
     first_win = wins[0] if wins else None
+    if first_win is None:
+        first_win = next(
+            (
+                int((e.get("payload") or {}).get("spin_index"))
+                for e in events
+                if str(e.get("event_type", "")) in (SessionEventType.SPIN_RESULT_SUMMARY.value, "spin_result_summary")
+                and (e.get("payload") or {}).get("result_kind") not in (None, "no_win")
+                and isinstance((e.get("payload") or {}).get("spin_index"), int)
+            ),
+            None,
+        )
     sbfw = (first_win - 1) if first_win is not None else None
 
     avg_gap = None
@@ -132,9 +169,12 @@ def build_summary(session_id: str, events: list[dict[str, Any]]) -> SessionSumma
         warnings.append("No wins detected; verify win_banner template and region.")
 
     primary_spins = spin_summaries or spins
-    visual_win_rate = (visual_win_count / primary_spins) if primary_spins else 0.0
     any_payout_rate = (any_payout_count / primary_spins) if primary_spins else 0.0
     real_win_rate = (real_win_count / primary_spins) if primary_spins else 0.0
+    empty_spin_rate = (empty_spin_count / primary_spins) if primary_spins else 0.0
+    visual_win_by_bet_rate = (visual_win_by_bet_count / primary_spins) if primary_spins else 0.0
+    big_win_rate = (big_win_count / primary_spins) if primary_spins else 0.0
+    missing_payout_rate = (missing_payout_count / primary_spins) if primary_spins else 0.0
 
     return SessionSummary(
         session_id=session_id,
@@ -144,7 +184,6 @@ def build_summary(session_id: str, events: list[dict[str, Any]]) -> SessionSumma
         total_spins=primary_spins,
         total_wins=len(wins),
         total_no_win=no_wins,
-        visual_win_count=visual_win_count,
         any_payout_count=any_payout_count,
         real_win_count=real_win_count,
         break_even_count=break_even_count,
@@ -154,7 +193,6 @@ def build_summary(session_id: str, events: list[dict[str, Any]]) -> SessionSumma
         click_to_spinning_timeout_count=click_to_spinning_timeout_count,
         spinning_to_result_timeout_count=spinning_to_result_timeout_count,
         result_to_ready_timeout_count=result_to_ready_timeout_count,
-        visual_win_rate=visual_win_rate,
         any_payout_rate=any_payout_rate,
         real_win_rate=real_win_rate,
         first_win_spin_index=first_win,
@@ -164,6 +202,17 @@ def build_summary(session_id: str, events: list[dict[str, Any]]) -> SessionSumma
         max_spins_between_wins=max_gap,
         near_miss_count=near_miss,
         near_miss_rate=nm_rate,
+        empty_spin_count=empty_spin_count,
+        empty_spin_rate=empty_spin_rate,
+        visual_win_count=visual_win_by_bet_count,
+        visual_win_rate=visual_win_by_bet_rate,
+        visual_win_spin_indices=visual_win_spin_indices,
+        big_win_count=big_win_count,
+        big_win_rate=big_win_rate,
+        big_win_spin_indices=big_win_spin_indices,
+        missing_payout_count=missing_payout_count,
+        missing_payout_rate=missing_payout_rate,
+        locked_session_bet=locked_session_bet,
         bonus_tease_count=bonus_tease,
         bonus_trigger_count=bonus_trig,
         end_reason=end_reason,

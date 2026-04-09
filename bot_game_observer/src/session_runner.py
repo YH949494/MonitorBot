@@ -103,6 +103,7 @@ class SessionRunner:
         self._spinning_since: float | None = None
         self._awaiting_ready_since: float | None = None
         self._payout_samples: deque[tuple[float, float]] = deque(maxlen=3)
+        self._bet_samples: deque[tuple[float, float]] = deque(maxlen=6)
         self._balance_samples: deque[tuple[float, float]] = deque(maxlen=3)
         self._result_evidence_saved = False
         self._finalize_on_ready = False
@@ -116,6 +117,11 @@ class SessionRunner:
         self._post_result_animation_reason: str | None = None
         self._result_detected_mono: float | None = None
         self._spin_start_evidence_seen = False
+        self._locked_session_bet: float | None = None
+        self._bet_lock_acquired_at_spin: int | None = None
+        self._bet_lock_source: str | None = None
+        self._last_payout_sample_mono: float | None = None
+        self._last_bet_sample_mono: float | None = None
         self._error_count = 0
         self._armed_for_click = True
 
@@ -138,6 +144,10 @@ class SessionRunner:
         return "none"
 
     def _start_spin_attempt(self, click_ts: datetime | None) -> None:
+        if self._spin_counter == 0:
+            self._locked_session_bet = None
+            self._bet_lock_acquired_at_spin = None
+            self._bet_lock_source = None
         self._spin_counter += 1
         self._active_spin = SpinResult(
             spin_index=self._spin_counter,
@@ -150,6 +160,7 @@ class SessionRunner:
         self._spinning_since = None
         self._awaiting_ready_since = None
         self._payout_samples.clear()
+        self._bet_samples.clear()
         self._balance_samples.clear()
         self._result_evidence_saved = False
         self._finalize_on_ready = False
@@ -157,6 +168,8 @@ class SessionRunner:
         self._post_result_animation_reason = None
         self._result_detected_mono = None
         self._spin_start_evidence_seen = False
+        self._last_payout_sample_mono = None
+        self._last_bet_sample_mono = None
 
     def _save_evidence_crop(self, frame: FramePacket, region: Region | None, tag: str) -> None:
         if not self.settings.detection.payout_evidence_mode or self._active_spin is None or region is None:
@@ -391,8 +404,9 @@ class SessionRunner:
             return
         if probable_win_signal:
             self._active_spin.win_signal_detected = True
+        canonical_bet = self._locked_session_bet if self._locked_session_bet is not None else self._active_spin.bet
         payload = classify_spin_result(
-            bet=self._active_spin.bet,
+            bet=canonical_bet,
             payout=payout,
             visual_win=visual_win if visual_win is not None else self._active_spin.visual_win,
             detector_status=detector_status,
@@ -416,6 +430,17 @@ class SessionRunner:
         self._active_spin.chosen_payout_source = self._active_spin.payout_source
         self._active_spin.payout = payout
         self._active_spin.payout_read_success = payout is not None
+        self._active_spin.locked_session_bet = self._locked_session_bet
+        self._active_spin.bet_lock_acquired_at_spin = self._bet_lock_acquired_at_spin
+        self._active_spin.bet_lock_source = self._bet_lock_source
+        self._active_spin.canonical_bet = canonical_bet
+        self._active_spin.empty_spin = self._active_spin.result_kind == "no_win"
+        if payout is None or canonical_bet is None:
+            self._active_spin.visual_win_by_bet = None
+            self._active_spin.big_win = None
+        else:
+            self._active_spin.visual_win_by_bet = payout < canonical_bet
+            self._active_spin.big_win = payout > canonical_bet
         self._active_spin.fallback_used = fallback_used
         if self._active_spin.ts_result_detected is None:
             self._active_spin.ts_result_detected = _utcnow()
@@ -428,6 +453,7 @@ class SessionRunner:
         self._spinning_since = None
         self._awaiting_ready_since = None
         self._payout_samples.clear()
+        self._bet_samples.clear()
         self._balance_samples.clear()
         self._result_evidence_saved = False
         self._finalize_on_ready = False
@@ -435,6 +461,8 @@ class SessionRunner:
         self._post_result_animation_reason = None
         self._result_detected_mono = None
         self._spin_start_evidence_seen = False
+        self._last_payout_sample_mono = None
+        self._last_bet_sample_mono = None
 
     def _normalize_spin_result_timestamps(self, spin: SpinResult) -> None:
         if spin.post_result_animation_duration_sec is not None:
@@ -464,8 +492,8 @@ class SessionRunner:
             return False
         elapsed = time.monotonic() - self._result_detected_mono
         return (
-            elapsed < self.settings.detection.payout_read_retry_window_sec
-            and self._active_spin.payout_read_attempts < self.settings.detection.payout_read_max_attempts
+            elapsed < (self.settings.detection.payout_sampling_window_ms / 1000.0)
+            and self._active_spin.payout_read_attempts < self.settings.detection.payout_stabilization_max_attempts
         )
 
     def _read_amount(self, frame: FramePacket, region: Region | None) -> tuple[float | None, float]:
@@ -483,6 +511,49 @@ class SessionRunner:
             return None, 0.0
         return float(v1), float((c1 + c2) / 2.0)
 
+    def _stabilize_amount(
+        self,
+        samples: deque[tuple[float, float]],
+        *,
+        min_confirmations: int,
+        min_attempts: int,
+    ) -> tuple[float | None, float, str | None]:
+        if len(samples) < max(1, min_attempts):
+            return None, 0.0, None
+        normalized_values = [round(v, 2) for v, _c in samples]
+        last = normalized_values[-1]
+        consecutive = 1
+        for idx in range(len(normalized_values) - 2, -1, -1):
+            if normalized_values[idx] != last:
+                break
+            consecutive += 1
+        if consecutive >= min_confirmations:
+            confidences = [c for v, c in samples if round(v, 2) == last]
+            conf = (sum(confidences) / len(confidences)) if confidences else 0.0
+            return float(last), float(conf), "consecutive"
+
+        counts: dict[float, int] = {}
+        conf_by_value: dict[float, list[float]] = {}
+        for value, conf in samples:
+            k = round(value, 2)
+            counts[k] = counts.get(k, 0) + 1
+            conf_by_value.setdefault(k, []).append(conf)
+        top_value, top_count = max(counts.items(), key=lambda item: item[1])
+        if top_count >= min_confirmations and top_count > (len(samples) // 2):
+            conf = sum(conf_by_value[top_value]) / len(conf_by_value[top_value])
+            return float(top_value), float(conf), "majority"
+        return None, 0.0, None
+
+    def _maybe_lock_session_bet(self, stable_bet: float, source: str) -> None:
+        if self._active_spin is None or self._locked_session_bet is not None:
+            return
+        max_lock_spin = self.settings.detection.bet_lock_max_spins_from_session_start
+        if self._active_spin.spin_index > max_lock_spin:
+            return
+        self._locked_session_bet = stable_bet
+        self._bet_lock_acquired_at_spin = self._active_spin.spin_index
+        self._bet_lock_source = source
+
     def _update_payout_resolution(self, frame: FramePacket, sig: FrameSignals) -> None:
         if self._active_spin is None:
             return
@@ -497,41 +568,76 @@ class SessionRunner:
                 dedupe=True,
             )
             return
-        if (now_mono - self._result_detected_mono) < self.settings.detection.payout_read_delay_sec:
+        payout_initial_delay = self.settings.detection.payout_sampling_initial_delay_ms / 1000.0
+        payout_window = self.settings.detection.payout_sampling_window_ms / 1000.0
+        payout_retry_interval = self.settings.detection.payout_sampling_retry_interval_ms / 1000.0
+        if (now_mono - self._result_detected_mono) < payout_initial_delay:
             return
-        if (now_mono - self._result_detected_mono) >= self.settings.detection.payout_read_retry_window_sec:
+        if (now_mono - self._result_detected_mono) >= payout_window:
             self._append_sampling_diag(
                 "payout",
                 {"code": "sampling_window_expired", "ts_mono": now_mono},
                 dedupe=True,
             )
+            if self._active_spin.payout is None and self._active_spin.stabilization_fail_reason is None:
+                self._active_spin.stabilization_fail_reason = "payout_window_expired_without_stabilization"
             return
-        if self._active_spin.payout_read_attempts >= self.settings.detection.payout_read_max_attempts:
+        if self._active_spin.payout_read_attempts >= self.settings.detection.payout_stabilization_max_attempts:
             self._append_sampling_diag(
                 "payout",
                 {"code": "sampling_window_expired", "ts_mono": now_mono},
                 dedupe=True,
             )
+            if self._active_spin.payout is None and self._active_spin.stabilization_fail_reason is None:
+                self._active_spin.stabilization_fail_reason = "payout_max_attempts_without_stabilization"
             return
         self._active_spin.payout_resolution_attempts += 1
-        if self._active_spin.bet is None:
+        bet_window = self.settings.detection.bet_sampling_window_ms / 1000.0
+        bet_retry_interval = self.settings.detection.bet_sampling_retry_interval_ms / 1000.0
+        if (
+            self._active_spin.bet_read_attempts < self.settings.detection.bet_sampling_max_attempts
+            and (now_mono - self._result_detected_mono) < bet_window
+            and (self._last_bet_sample_mono is None or (now_mono - self._last_bet_sample_mono) >= bet_retry_interval)
+        ):
+            self._active_spin.bet_read_attempts += 1
+            self._last_bet_sample_mono = now_mono
             bet, bconf = self._attempt_sample_amount(frame, regs.bet_text, "bet")
             if bet is not None:
-                self._active_spin.bet = bet
-                self._active_spin.confidence_payout = bconf
-                self._active_spin.chosen_bet_source = "ocr"
+                self._active_spin.current_spin_raw_bet = bet
+                self._bet_samples.append((bet, bconf))
+                stable_bet, _stable_bet_conf, bet_source = self._stabilize_amount(
+                    self._bet_samples,
+                    min_confirmations=self.settings.detection.bet_stabilization_min_confirmations,
+                    min_attempts=self.settings.detection.bet_stabilization_min_attempts,
+                )
+                if stable_bet is not None:
+                    self._active_spin.bet = stable_bet
+                    self._active_spin.bet_read_success = True
+                    self._active_spin.chosen_bet_source = "ocr"
+                    self._maybe_lock_session_bet(stable_bet, bet_source or "stabilized")
 
+        if self._locked_session_bet is not None and self._active_spin.current_spin_raw_bet is not None:
+            self._active_spin.bet_mismatch_vs_lock = abs(self._active_spin.current_spin_raw_bet - self._locked_session_bet) > 0.009
+
+        if self._last_payout_sample_mono is not None and (now_mono - self._last_payout_sample_mono) < payout_retry_interval:
+            return
         self._active_spin.payout_read_attempts += 1
+        self._last_payout_sample_mono = now_mono
         payout, pconf = self._attempt_sample_amount(frame, regs.payout_text, "payout")
         if payout is not None:
             self._payout_samples.append((payout, pconf))
-            stable_payout, stable_conf = self._stable_amount(self._payout_samples)
+            stable_payout, stable_conf, payout_source = self._stabilize_amount(
+                self._payout_samples,
+                min_confirmations=self.settings.detection.payout_stabilization_min_confirmations,
+                min_attempts=self.settings.detection.payout_stabilization_min_attempts,
+            )
             if stable_payout is not None:
                 self._active_spin.payout = stable_payout
                 self._active_spin.payout_source = "ocr"
                 self._active_spin.chosen_payout_source = "ocr"
                 self._active_spin.payout_resolution_status = "confirmed"
                 self._active_spin.confidence_payout = stable_conf
+                self._active_spin.payout_stabilized_value_source = payout_source
                 self._active_spin.detector_status = "confirmed"
                 self._active_spin.reason = "payout_read_success"
                 self._active_spin.payout_read_success = True
@@ -592,16 +698,19 @@ class SessionRunner:
         except Exception:
             self._append_sampling_diag(sample_kind, {"code": "ocr_exception", "ts_mono": now_mono})
             return None, 0.0
+        raw_attempt = {"ts_mono": now_mono, "raw_text": text}
         if sample_kind == "payout":
             self._active_spin.raw_payout_ocr_samples.append(text)
+            self._active_spin.payout_raw_attempts.append(raw_attempt)
         elif sample_kind == "balance":
             self._active_spin.raw_balance_samples.append(text)
         else:
             self._active_spin.raw_bet_ocr_samples.append(text)
+            self._active_spin.bet_raw_attempts.append(raw_attempt)
         if not text.strip():
             self._append_sampling_diag(sample_kind, {"code": "ocr_blank", "ts_mono": now_mono})
             return None, 0.0
-        amount, conf = vision.parse_numeric_amount(text)
+        amount, conf = vision.parse_numeric_amount(text, hint=sample_kind)
         if amount is None:
             self._append_sampling_diag(sample_kind, {"code": "parse_failed", "ts_mono": now_mono, "raw_text": text})
             return None, 0.0
@@ -1112,7 +1221,7 @@ class SessionRunner:
                         self._result_detected_mono is not None
                         and self._active_spin.payout_read_attempts == 0
                         and (time.monotonic() - self._result_detected_mono)
-                        < self.settings.detection.payout_read_retry_window_sec
+                        < (self.settings.detection.payout_sampling_window_ms / 1000.0)
                     ):
                         continue
                     probable_win_signal = self._detect_probable_win_signal(sig)

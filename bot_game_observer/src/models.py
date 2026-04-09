@@ -72,6 +72,18 @@ class DetectionConfig(BaseModel):
     payout_read_delay_sec: float = Field(default=0.25, ge=0.0)
     payout_read_retry_window_sec: float = Field(default=1.0, ge=0.0)
     payout_read_max_attempts: int = Field(default=5, ge=1)
+    payout_sampling_initial_delay_ms: int = Field(default=250, ge=0)
+    payout_sampling_retry_interval_ms: int = Field(default=150, ge=0)
+    payout_sampling_window_ms: int = Field(default=1000, ge=1)
+    payout_stabilization_min_confirmations: int = Field(default=2, ge=2)
+    payout_stabilization_min_attempts: int = Field(default=2, ge=1)
+    payout_stabilization_max_attempts: int = Field(default=6, ge=1)
+    bet_sampling_retry_interval_ms: int = Field(default=120, ge=0)
+    bet_sampling_window_ms: int = Field(default=1000, ge=1)
+    bet_stabilization_min_confirmations: int = Field(default=2, ge=2)
+    bet_stabilization_min_attempts: int = Field(default=2, ge=1)
+    bet_sampling_max_attempts: int = Field(default=6, ge=1)
+    bet_lock_max_spins_from_session_start: int = Field(default=5, ge=1)
     payout_evidence_mode: bool = False
     payout_evidence_dir: str = "logs/payout_evidence"
     scatter_trigger_count: int = Field(default=4, ge=1)
@@ -234,6 +246,15 @@ class SessionSummary(BaseModel):
     max_spins_between_wins: int | None = None
     near_miss_count: int = 0
     near_miss_rate: float = 0.0
+    empty_spin_count: int = 0
+    empty_spin_rate: float = 0.0
+    visual_win_spin_indices: list[int] = Field(default_factory=list)
+    big_win_count: int = 0
+    big_win_rate: float = 0.0
+    big_win_spin_indices: list[int] = Field(default_factory=list)
+    missing_payout_count: int = 0
+    missing_payout_rate: float = 0.0
+    locked_session_bet: float | None = None
     bonus_tease_count: int = 0
     bonus_trigger_count: int = 0
     end_reason: str = ""
