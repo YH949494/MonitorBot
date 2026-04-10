@@ -21,10 +21,10 @@
       "height": 140
     },
     "reels": {
-      "left": 350,
-      "top": 150,
-      "width": 1100,
-      "height": 650
+      "left": 185,
+      "top": 65,
+      "width": 843,
+      "height": 535
     },
     "popup_close": {
       "left": 1180,
@@ -92,6 +92,14 @@
     "session_end": {
       "path": "assets/templates/session_end.png",
       "threshold": 0.88
+    },
+    "scatter_symbol": {
+      "path": "assets/templates/scatter_symbol.png",
+      "threshold": 0.93
+    },
+    "bonus_symbol": {
+      "path": "assets/templates/bonus_symbol.png",
+      "threshold": 0.93
     }
   },
   "detection": {
@@ -116,7 +124,31 @@
     "payout_evidence_mode": true,
     "payout_evidence_dir": "logs/payout_evidence",
     "use_ocr_balance": true,
-    "ocr_lang": "eng"
+    "ocr_lang": "eng",
+    "payout_sampling_initial_delay_ms": 250,
+    "payout_sampling_retry_interval_ms": 150,
+    "payout_sampling_window_ms": 2500,
+    "payout_stabilization_min_confirmations": 2,
+    "payout_stabilization_min_attempts": 2,
+    "payout_stabilization_max_attempts": 10,
+    "bet_sampling_retry_interval_ms": 120,
+    "bet_sampling_window_ms": 2500,
+    "bet_stabilization_min_confirmations": 2,
+    "bet_stabilization_min_attempts": 2,
+    "bet_sampling_max_attempts": 8,
+    "bet_lock_max_spins_from_session_start": 5,
+    "scatter_trigger_count": 4,
+    "bonus_trigger_count": 4,
+    "scatter_min_count_for_signal": 2,
+    "bonus_min_count_for_signal": 2,
+    "scatter_min_score_for_signal": 0.96,
+    "bonus_min_score_for_signal": 0.96,
+    "symbol_match_center_merge_px": 24,
+    "symbol_max_count_cap": 12,
+    "symbol_capture_cooldown_sec": 2.0,
+    "symbol_debug_mode": false,
+    "symbol_debug_max_spins": 10,
+    "symbol_debug_save_reels_crop": true
   },
   "automation": {
     "enable_clicking": true,
@@ -127,8 +159,8 @@
     "panic_stop_file": "logs/STOP.txt"
   },
   "session": {
-    "max_spins": 300,
-    "max_duration_min": 45.0,
+    "max_spins": 3000,
+    "max_duration_min": 600.0,
     "max_consecutive_errors": 10
   },
   "output": {
