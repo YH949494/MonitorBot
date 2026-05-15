@@ -1,0 +1,47 @@
+{
+  "game_id": "egypt_demo",
+  "sample_id": "sample_001",
+  "image": "sample_001.png",
+  "frame_index": 1,
+  "reels_region": {
+    "left": 10,
+    "top": 10,
+    "width": 150,
+    "height": 90
+  },
+  "expected_grid": [
+    [
+      "A",
+      "K",
+      "WILD"
+    ],
+    [
+      "SCATTER",
+      "Q",
+      "A"
+    ],
+    [
+      "J",
+      "BONUS",
+      "WILD"
+    ],
+    [
+      "A",
+      "K",
+      "Q"
+    ],
+    [
+      "SCATTER",
+      "A",
+      "J"
+    ]
+  ],
+  "expected_symbols": {
+    "wild_count": 2,
+    "scatter_count": 2,
+    "bonus_count": 1
+  },
+  "bet_amount": 1.0,
+  "payout_amount": 0.5,
+  "notes": "synthetic placeholder following real-sample format"
+}

@@ -1,0 +1,4 @@
+validation_samples/**/*.png
+validation_samples/**/*.jpg
+validation_samples/**/*.jpeg
+validation_samples/**/*.npy
