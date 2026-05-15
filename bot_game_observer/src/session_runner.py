@@ -42,6 +42,7 @@ from .spin_result import DetectorStatus, SpinResult, classify_spin_result
 from .templates import load_template_grayscale
 from . import vision
 from .metrics import build_summary
+from .live_slot_ingestion import ingest_live_spin_event
 from .app_paths import logs_path, resolve_path_relative_to_app
 from .utils import random_delay
 
@@ -1320,6 +1321,23 @@ class SessionRunner:
                     observation_payload = self._detect_symbol_observations(frame)
                     for key, value in observation_payload.items():
                         setattr(self._active_spin, key, value)
+                    try:
+                        live_ingest = ingest_live_spin_event(
+                            frame=frame.image_bgr,
+                            frame_index=frame.frame_index,
+                            session_id=self.session_id,
+                            regions_or_settings=self.settings.regions,
+                            spin_id=str(self._active_spin.spin_index),
+                            bet_amount=self._active_spin.canonical_bet if getattr(self._active_spin, "canonical_bet", None) is not None else self._active_spin.bet,
+                            payout_amount=self._active_spin.payout_effective_value if getattr(self._active_spin, "payout_effective_value", None) is not None else self._active_spin.payout,
+                            free_spin_mode=False,
+                            ready_state_confirmed=(self.sm.state == BotState.READY_TO_SPIN),
+                        )
+                        if live_ingest.enabled and not live_ingest.ingested:
+                            log.warning("live slot ingestion skipped: %s", live_ingest.reason)
+                    except Exception as exc:
+                        log.warning("live slot ingestion failed non-fatally: %s", exc)
+
                     self._finalize_spin_result(
                         detector_status=self._active_spin.detector_status,
                         reason=finalize_reason,
