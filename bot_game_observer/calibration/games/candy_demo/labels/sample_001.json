@@ -1,0 +1,23 @@
+{
+  "game_id": "candy_demo",
+  "sample_id": "sample_001",
+  "screenshot": "../screenshots/sample_001.png",
+  "frame_index": 1,
+  "reels_region": {
+    "left": 10,
+    "top": 10,
+    "width": 150,
+    "height": 90
+  },
+  "expected_grid": [
+    ["Wild", "Bonus", "A"],
+    ["K", "Scatter", "Wild"],
+    ["A", "K", "Bonus"],
+    ["Scatter", "A", "K"],
+    ["Wild", "A", "Scatter"]
+  ],
+  "bet_amount": 1.0,
+  "payout_amount": 0.5,
+  "label_quality": "synthetic_placeholder",
+  "notes": "synthetic placeholder for clean checkout calibration self-test"
+}
