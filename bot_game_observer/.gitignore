@@ -1,4 +1,11 @@
+calibration/games/*/screenshots/*
+!calibration/games/*/screenshots/.gitkeep
+calibration/games/*/templates/*.png
+calibration/games/*/templates/*.jpg
+calibration/games/*/templates/*.jpeg
+calibration/games/*/templates/*.npy
 validation_samples/**/*.png
 validation_samples/**/*.jpg
 validation_samples/**/*.jpeg
 validation_samples/**/*.npy
+calibration/games/*/templates/manifest.json
