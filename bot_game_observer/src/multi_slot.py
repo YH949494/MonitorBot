@@ -24,6 +24,7 @@ class GameProfile:
     bonus_trigger_rule: dict[str, Any]
     created_at: str
     updated_at: str
+    symbol_templates: dict[str, str] | None = None
 
 
 class MultiSlotStore:
