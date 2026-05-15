@@ -1,0 +1,16 @@
+{
+  "game_id": "egypt_demo",
+  "game_name": "Egypt Demo",
+  "provider": "DemoProvider",
+  "reel_count": 5,
+  "row_count": 3,
+  "layout_type": "reels",
+  "paylines_or_ways": "20_paylines",
+  "symbol_mappings": {"Wild":"WILD","Scatter":"SCATTER","Bonus":"BONUS"},
+  "wild_symbols": ["WILD"],
+  "scatter_symbols": ["SCATTER"],
+  "bonus_symbols": ["BONUS"],
+  "bonus_trigger_rule": {"scatter_count": 2},
+  "created_at": "2026-05-15T00:00:00Z",
+  "updated_at": "2026-05-15T00:00:00Z"
+}

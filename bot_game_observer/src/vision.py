@@ -27,7 +27,9 @@ def crop_region(image_bgr_or_gray: np.ndarray, region: Region) -> np.ndarray:
 def to_gray(image: np.ndarray) -> np.ndarray:
     if image.ndim == 2:
         return image
-    return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    if hasattr(cv2, "cvtColor") and hasattr(cv2, "COLOR_BGR2GRAY"):
+        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return image[..., 0]
 
 
 def template_match_best(
@@ -41,6 +43,15 @@ def template_match_best(
     if tmpl_gray.size == 0 or scene_gray.size == 0:
         return 0.0, (0, 0)
     if tmpl_gray.shape[0] > scene_gray.shape[0] or tmpl_gray.shape[1] > scene_gray.shape[1]:
+        return 0.0, (0, 0)
+    if float(np.std(tmpl_gray)) == 0.0:
+        th, tw = tmpl_gray.shape[:2]
+        target = int(tmpl_gray[0, 0])
+        for y in range(0, scene_gray.shape[0] - th + 1):
+            for x in range(0, scene_gray.shape[1] - tw + 1):
+                patch = scene_gray[y : y + th, x : x + tw]
+                if patch.shape == tmpl_gray.shape and int(patch[0, 0]) == target and np.all(patch == tmpl_gray):
+                    return 1.0, (x, y)
         return 0.0, (0, 0)
     res = cv2.matchTemplate(scene_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED)
     _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(res)

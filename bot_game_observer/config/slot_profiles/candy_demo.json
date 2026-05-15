@@ -1,0 +1,16 @@
+{
+  "game_id": "candy_demo",
+  "game_name": "Candy Demo",
+  "provider": "DemoProvider",
+  "reel_count": 5,
+  "row_count": 3,
+  "layout_type": "reels",
+  "paylines_or_ways": "243_ways",
+  "symbol_mappings": {"Wild":"W","Scatter":"S","Bonus":"B","S":"S"},
+  "wild_symbols": ["W"],
+  "scatter_symbols": ["B"],
+  "bonus_symbols": ["S"],
+  "bonus_trigger_rule": {"scatter_count": 3},
+  "created_at": "2026-05-15T00:00:00Z",
+  "updated_at": "2026-05-15T00:00:00Z"
+}
