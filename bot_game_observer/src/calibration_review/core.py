@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from pathlib import Path
 
 from src.models import BotSettings, Region
 
@@ -108,3 +110,22 @@ def confirm_calibration(settings: BotSettings) -> BotSettings:
     updated = settings.model_copy(deep=True)
     updated.calibrated = True
     return updated
+
+
+def resolve_grid_dimensions(
+    settings: BotSettings,
+    profiles_dir: str | Path,
+    fallback: tuple[int, int] = (5, 3),
+) -> tuple[int, int]:
+    profile_path = Path(profiles_dir) / f"{settings.game_profile}.json"
+    if not profile_path.is_file():
+        return fallback
+    try:
+        data = json.loads(profile_path.read_text(encoding="utf-8"))
+        reels = int(data["reel_count"])
+        rows = int(data["row_count"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return fallback
+    if reels <= 0 or rows <= 0:
+        return fallback
+    return reels, rows

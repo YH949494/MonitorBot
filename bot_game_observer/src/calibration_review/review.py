@@ -12,6 +12,7 @@ from src.calibration_review.core import (
     apply_manual_override,
     confirm_calibration,
     editable_region_names,
+    resolve_grid_dimensions,
     validate_required_regions,
 )
 from src.calibration_review.overlay import CalibrationOverlay
@@ -63,14 +64,18 @@ class CalibrationReviewWindow(QMainWindow):
         self.settings = settings
         self.config_path = config_path
         self.screenshot_path = screenshot_path
+        self.reel_count, self.row_count = resolve_grid_dimensions(
+            settings,
+            get_app_root() / "config" / "slot_profiles",
+        )
         self.setWindowTitle("MonitorBot Calibration Review")
         self.resize(1200, 780)
 
         self.overlay = CalibrationOverlay(
             str(screenshot_path),
             region_dict(settings),
-            reel_count=5,
-            row_count=3,
+            reel_count=self.reel_count,
+            row_count=self.row_count,
         )
         self.overlay.regionChanged.connect(self.on_region_changed)
 
@@ -149,6 +154,7 @@ class CalibrationReviewWindow(QMainWindow):
         self.status_label.setText(
             f"Config: {self.config_path}\n"
             f"Screenshot: {self.screenshot_path}\n"
+            f"Grid: {self.reel_count}x{self.row_count}\n"
             f"calibrated={self.settings.calibrated}\n"
             f"{required}"
         )
