@@ -44,6 +44,15 @@ def _dispatch(argv: list[str]) -> int:
         sys.argv = [argv[0], *argv[2:]]
         return calibrate_main()
 
+    if command == "review":
+        try:
+            from src.calibration_review.review import main as review_main
+        except ModuleNotFoundError:
+            get_logger().error("'review' command is not available in this build")
+            return 2
+
+        return review_main(rest)
+
     get_logger().error("Unknown command: %s", command)
     return 2
 
