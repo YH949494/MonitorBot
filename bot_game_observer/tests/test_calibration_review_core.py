@@ -7,6 +7,7 @@ from src.calibration_review.core import (
     fit_image_to_view,
     region_from_display,
     region_to_display,
+    resolve_grid_dimensions,
     validate_required_regions,
 )
 from src.models import BotSettings, CaptureConfig, CaptureMode, GameRegions, Region
@@ -103,3 +104,40 @@ def test_confirm_calibration_refuses_missing_required_regions() -> None:
         assert "reels" in str(exc)
     else:
         raise AssertionError("confirmation accepted a missing reels region")
+
+
+def test_resolve_grid_dimensions_uses_matching_slot_profile(tmp_path) -> None:
+    profiles = tmp_path / "slot_profiles"
+    profiles.mkdir()
+    (profiles / "wide_demo.json").write_text(
+        """
+        {
+          "game_id": "wide_demo",
+          "game_name": "Wide Demo",
+          "provider": "DemoProvider",
+          "reel_count": 6,
+          "row_count": 5,
+          "layout_type": "reels",
+          "paylines_or_ways": "cluster",
+          "symbol_mappings": {},
+          "wild_symbols": [],
+          "scatter_symbols": [],
+          "bonus_symbols": [],
+          "bonus_trigger_rule": {},
+          "created_at": "2026-05-16T00:00:00Z",
+          "updated_at": "2026-05-16T00:00:00Z"
+        }
+        """,
+        encoding="utf-8",
+    )
+    settings = _settings()
+    settings.game_profile = "wide_demo"
+
+    assert resolve_grid_dimensions(settings, profiles) == (6, 5)
+
+
+def test_resolve_grid_dimensions_falls_back_when_profile_missing(tmp_path) -> None:
+    settings = _settings()
+    settings.game_profile = "missing_demo"
+
+    assert resolve_grid_dimensions(settings, tmp_path) == (5, 3)

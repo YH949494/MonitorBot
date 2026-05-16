@@ -1,5 +1,5 @@
 game_profile: generic_reel_game
-calibrated: true
+calibrated: false
 
 capture:
   mode: region

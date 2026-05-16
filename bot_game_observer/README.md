@@ -10,6 +10,7 @@ This tool is **not** for bypassing anti-cheat, tampering with game clients, reve
 
 - **Window or region capture** via `mss` (fast ROI capture).
 - **Calibration wizard** (`calibrate.py` or `bot_game_observer.exe calibrate`) for capture area, sub-regions, and template crops.
+- **Calibration review UI** (`review.py` or `bot_game_observer.exe review`) for visually confirming regions before live runs.
 - **Vision pipeline**: template matching (OpenCV), reel motion via frame differencing, optional OCR hook (pytesseract) if you extend it.
 - **State machine** with debounced transitions and confidence metadata.
 - **Safe automation**: `enable_clicking: false` by default; `--live-click` required for real clicks; jittered click positions; clicks/minute cap; optional panic-stop file (`logs/STOP.txt`); ESC hotkey when the `keyboard` module works.
@@ -58,9 +59,15 @@ If an older **`output/`** tree exists (pre-portable), it is **copied** into the 
    python calibrate.py
    ```
 
-2. Add template PNGs under `assets/templates/` (see `assets/templates/README.md`) or capture them from the wizard.
+2. Review the detected regions and explicitly confirm calibration:
 
-3. **Observe only** (default: dry-run, no real clicks):
+   ```powershell
+   python review.py
+   ```
+
+3. Add template PNGs under `assets/templates/` (see `assets/templates/README.md`) or capture them from the wizard.
+
+4. **Observe only** (default: dry-run, no real clicks):
 
    ```powershell
    python run.py
@@ -68,13 +75,13 @@ If an older **`output/`** tree exists (pre-portable), it is **copied** into the 
 
    Optional: `python run.py --config config\default.yaml` (YAML or JSON).
 
-4. **Live clicking** (requires `--live-click` **and** `automation.enable_clicking: true` in config):
+5. **Live clicking** (requires `--live-click` **and** `automation.enable_clicking: true` in config):
 
    ```powershell
    python run.py --live-click --no-dry-run
    ```
 
-5. Rebuild reports from a log:
+6. Rebuild reports from a log:
 
    ```powershell
    python analyze_session.py logs\sessions\session_<id>.jsonl
@@ -87,6 +94,7 @@ From the built folder (`dist/bot_game_observer/`):
 ```text
 bot_game_observer.exe              # same as python run.py
 bot_game_observer.exe calibrate
+bot_game_observer.exe review
 bot_game_observer.exe analyze logs\sessions\session_<id>.jsonl
 ```
 
@@ -104,11 +112,12 @@ Copy the entire **`dist/bot_game_observer/`** directory to a USB drive or anothe
 
 - Prefer **regions relative to the capture** (`coordinate_mode: relative_to_capture`): when you move the game window, you only update the main capture rectangle.
 - Templates are **game-specific**: thresholds must be tuned per title/skin.
+- `calibrated: true` should only be saved from the review UI after the required `reels` and `spin_button` regions are visually checked.
 - **Near-miss** and **bonus tease** are **not** universal concepts—define them with your own crops and conservative thresholds.
 
 ## Safety defaults
 
-- Paused until you set `calibrated: true`.
+- Paused until the review UI confirms and saves `calibrated: true`.
 - **Dry-run** for click logging unless `--no-dry-run` is passed with `--live-click`.
 - No keyboard automation; only optional single clicks in the spin region.
 - Create file `logs/STOP.txt` (or path in config) to stop the session on the next loop iteration.
